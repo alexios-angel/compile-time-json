@@ -4715,6 +4715,1180 @@ CTLL_EXPORT template <typename Node> constexpr std::string_view serialize(Node =
 
 #endif
 
+#ifndef CTJSON__DUMPS__HPP
+#define CTJSON__DUMPS__HPP
+
+#ifndef CTJSON__TYPES__HPP
+#define CTJSON__TYPES__HPP
+
+#ifndef CTLL__FIXED_STRING__GPP
+#define CTLL__FIXED_STRING__GPP
+
+#ifndef CTLL_IN_A_MODULE
+#include <utility>
+#include <cstddef>
+#include <string_view>
+#include <array>
+#include <cstdint>
+#include <iosfwd>
+#endif
+
+#ifndef CTLL__UTILITIES__HPP
+#define CTLL__UTILITIES__HPP
+
+#ifndef CTLL_IN_A_MODULE
+#include <type_traits>
+#endif
+
+#ifdef CTLL_IN_A_MODULE
+#define CTLL_EXPORT export
+#else
+#define CTLL_EXPORT 
+#endif
+
+#if defined __cpp_nontype_template_parameter_class
+    #define CTLL_CNTTP_COMPILER_CHECK 1
+#elif defined __cpp_nontype_template_args
+// compiler which defines correctly feature test macro (not you clang)
+    #if __cpp_nontype_template_args >= 201911L
+        #define CTLL_CNTTP_COMPILER_CHECK 1
+    #elif __cpp_nontype_template_args >= 201411L
+// appleclang 13+
+      #if defined __apple_build_version__
+        #if defined __clang_major__ && __clang_major__ >= 13
+// but only in c++20 and more
+          #if __cplusplus > 201703L
+              #define CTLL_CNTTP_COMPILER_CHECK 1
+          #endif
+        #endif
+      #else 
+// clang 12+
+        #if defined __clang_major__ && __clang_major__ >= 12
+// but only in c++20 and more
+          #if __cplusplus > 201703L
+              #define CTLL_CNTTP_COMPILER_CHECK 1
+          #endif
+        #endif
+      #endif
+    #endif
+#endif
+
+#ifndef CTLL_CNTTP_COMPILER_CHECK
+    #define CTLL_CNTTP_COMPILER_CHECK 0
+#endif
+
+#ifdef _MSC_VER
+#define CTLL_FORCE_INLINE __forceinline
+#else
+#define CTLL_FORCE_INLINE __attribute__((always_inline))
+#endif
+
+namespace ctll {
+	
+template <bool> struct conditional_helper;
+	
+template <> struct conditional_helper<true> {
+	template <typename A, typename> using type = A;
+};
+
+template <> struct conditional_helper<false> {
+	template <typename, typename B> using type = B;
+};
+
+template <bool V, typename A, typename B> using conditional = typename conditional_helper<V>::template type<A,B>;
+	
+}
+
+#endif
+
+namespace ctll {
+
+struct length_value_t {
+	uint32_t value;
+	uint8_t length;
+};
+
+constexpr length_value_t length_and_value_of_utf8_code_point(uint8_t first_unit) noexcept {
+	if ((first_unit & 0b1000'0000) == 0b0000'0000) return {static_cast<uint32_t>(first_unit), 1};
+	else if ((first_unit & 0b1110'0000) == 0b1100'0000) return {static_cast<uint32_t>(first_unit & 0b0001'1111), 2};
+	else if ((first_unit & 0b1111'0000) == 0b1110'0000) return {static_cast<uint32_t>(first_unit & 0b0000'1111), 3};
+	else if ((first_unit & 0b1111'1000) == 0b1111'0000) return {static_cast<uint32_t>(first_unit & 0b0000'0111), 4};
+	else if ((first_unit & 0b1111'1100) == 0b1111'1000) return {static_cast<uint32_t>(first_unit & 0b0000'0011), 5};
+	else if ((first_unit & 0b1111'1100) == 0b1111'1100) return {static_cast<uint32_t>(first_unit & 0b0000'0001), 6};
+	else return {0, 0};
+}
+
+constexpr char32_t value_of_trailing_utf8_code_point(uint8_t unit, bool & correct) noexcept {
+	if ((unit & 0b1100'0000) == 0b1000'0000) return unit & 0b0011'1111;
+	else {
+		correct = false;
+		return 0;
+	}
+}
+
+constexpr length_value_t length_and_value_of_utf16_code_point(uint16_t first_unit) noexcept {
+	if ((first_unit & 0b1111110000000000) == 0b1101'1000'0000'0000) return {static_cast<uint32_t>(first_unit & 0b0000001111111111), 2};
+	else return {first_unit, 1};
+}
+
+struct construct_from_pointer_t { };
+
+constexpr auto construct_from_pointer = construct_from_pointer_t{};
+
+template <typename> inline constexpr bool always_false_v = false;
+
+// A general purpose compile-time string.
+//
+// The content is stored as UTF-32 code points: construction from char8_t
+// (and, with CTRE_STRING_IS_UTF8, from char) decodes UTF-8, construction
+// from char16_t decodes UTF-16, and wchar_t/char32_t units are taken as
+// code points. `N` is the capacity in input code units; `size()` is the
+// decoded length, which can be smaller. A malformed encoding doesn't fail
+// the compilation by itself, it just sets `correct()` to false.
+//
+// The type is structural (all members public), so values can be used as
+// non-type template parameters in C++20.
+CTLL_EXPORT template <size_t N> struct fixed_string {
+	using value_type = char32_t;
+	using size_type = size_t;
+	using const_reference = const char32_t &;
+	using const_iterator = const char32_t *;
+	using iterator = const_iterator;
+
+	static constexpr size_t npos = static_cast<size_t>(-1);
+
+	char32_t content[N ? N : 1] = {};
+	size_t real_size{0};
+	bool correct_flag{true};
+
+	constexpr fixed_string() noexcept = default;
+
+	template <typename T> constexpr fixed_string(construct_from_pointer_t, const T * input) noexcept {
+		if constexpr (std::is_same_v<T, char>) {
+			#ifdef CTRE_STRING_IS_UTF8
+				size_t out{0};
+				for (size_t i{0}; i < N; ++i) {
+					length_value_t info = length_and_value_of_utf8_code_point(input[i]);
+					switch (info.length) {
+						case 6:
+							if (++i < N) info.value = (info.value << 6) | value_of_trailing_utf8_code_point(input[i], correct_flag);
+							[[fallthrough]];
+						case 5:
+							if (++i < N) info.value = (info.value << 6) | value_of_trailing_utf8_code_point(input[i], correct_flag);
+							[[fallthrough]];
+						case 4:
+							if (++i < N) info.value = (info.value << 6) | value_of_trailing_utf8_code_point(input[i], correct_flag);
+							[[fallthrough]];
+						case 3:
+							if (++i < N) info.value = (info.value << 6) | value_of_trailing_utf8_code_point(input[i], correct_flag);
+							[[fallthrough]];
+						case 2:
+							if (++i < N) info.value = (info.value << 6) | value_of_trailing_utf8_code_point(input[i], correct_flag);
+							[[fallthrough]];
+						case 1:
+							content[out++] = static_cast<char32_t>(info.value);
+							real_size++;
+							break;
+						default:
+							correct_flag = false;
+							return;
+					}
+				}
+			#else
+				for (size_t i{0}; i < N; ++i) {
+					content[i] = static_cast<uint8_t>(input[i]);
+					real_size++;
+				}
+			#endif
+#if defined(__cpp_char8_t)
+		} else if constexpr (std::is_same_v<T, char8_t>) {
+			size_t out{0};
+			for (size_t i{0}; i < N; ++i) {
+				length_value_t info = length_and_value_of_utf8_code_point(input[i]);
+				switch (info.length) {
+					case 6:
+						if (++i < N) info.value = (info.value << 6) | value_of_trailing_utf8_code_point(input[i], correct_flag);
+						[[fallthrough]];
+					case 5:
+						if (++i < N) info.value = (info.value << 6) | value_of_trailing_utf8_code_point(input[i], correct_flag);
+						[[fallthrough]];
+					case 4:
+						if (++i < N) info.value = (info.value << 6) | value_of_trailing_utf8_code_point(input[i], correct_flag);
+						[[fallthrough]];
+					case 3:
+						if (++i < N) info.value = (info.value << 6) | value_of_trailing_utf8_code_point(input[i], correct_flag);
+						[[fallthrough]];
+					case 2:
+						if (++i < N) info.value = (info.value << 6) | value_of_trailing_utf8_code_point(input[i], correct_flag);
+						[[fallthrough]];
+					case 1:
+						content[out++] = static_cast<char32_t>(info.value);
+						real_size++;
+						break;
+					default:
+						correct_flag = false;
+						return;
+				}
+			}
+#endif
+		} else if constexpr (std::is_same_v<T, char16_t>) {
+			size_t out{0};
+			for (size_t i{0}; i < N; ++i) {
+				length_value_t info = length_and_value_of_utf16_code_point(input[i]);
+				if (info.length == 2) {
+					if (++i < N) {
+						if ((input[i] & 0b1111'1100'0000'0000) == 0b1101'1100'0000'0000) {
+							content[out++] = ((info.value << 10) | (input[i] & 0b0000'0011'1111'1111)) + 0x10000;
+						} else {
+							correct_flag = false;
+							break;
+						}
+					}
+				} else {
+					content[out++] = info.value;
+				}
+			}
+			real_size = out;
+		} else if constexpr (std::is_same_v<T, wchar_t> || std::is_same_v<T, char32_t>) {
+			for (size_t i{0}; i < N; ++i) {
+				content[i] = static_cast<char32_t>(input[i]);
+				real_size++;
+			}
+		} else {
+			static_assert(always_false_v<T>, "ctll::fixed_string must be constructed from a character type (char, char8_t, char16_t, char32_t, wchar_t)");
+		}
+	}
+
+	template <typename T> constexpr fixed_string(const std::array<T, N> & in) noexcept: fixed_string{construct_from_pointer, in.data()} { }
+	template <typename T> constexpr fixed_string(const T (&input)[N+1]) noexcept: fixed_string{construct_from_pointer, input} { }
+
+	constexpr fixed_string(const fixed_string & other) noexcept {
+		for (size_t i{0}; i < N; ++i) {
+			content[i] = other.content[i];
+		}
+		real_size = other.real_size;
+		correct_flag = other.correct_flag;
+	}
+	constexpr fixed_string & operator=(const fixed_string & other) noexcept {
+		for (size_t i{0}; i < N; ++i) {
+			content[i] = other.content[i];
+		}
+		real_size = other.real_size;
+		correct_flag = other.correct_flag;
+		return *this;
+	}
+
+	// observers
+	constexpr bool correct() const noexcept {
+		return correct_flag;
+	}
+	constexpr size_t size() const noexcept {
+		return real_size;
+	}
+	constexpr size_t length() const noexcept {
+		return real_size;
+	}
+	static constexpr size_t max_size() noexcept {
+		return N;
+	}
+	static constexpr size_t capacity() noexcept {
+		return N;
+	}
+	constexpr bool empty() const noexcept {
+		return real_size == 0;
+	}
+
+	// element access
+	constexpr const char32_t * data() const noexcept {
+		return content;
+	}
+	constexpr const char32_t * begin() const noexcept {
+		return content;
+	}
+	constexpr const char32_t * end() const noexcept {
+		return content + size();
+	}
+	constexpr const char32_t * cbegin() const noexcept {
+		return begin();
+	}
+	constexpr const char32_t * cend() const noexcept {
+		return end();
+	}
+	constexpr char32_t operator[](size_t i) const noexcept {
+		return content[i];
+	}
+	constexpr char32_t front() const noexcept {
+		return content[0];
+	}
+	constexpr char32_t back() const noexcept {
+		return content[real_size - 1];
+	}
+
+	// conversion
+	constexpr std::basic_string_view<char32_t> view() const noexcept {
+		return std::basic_string_view<char32_t>{content, size()};
+	}
+	constexpr operator std::basic_string_view<char32_t>() const noexcept {
+		return view();
+	}
+
+	// comparison
+	template <size_t M> constexpr bool is_same_as(const fixed_string<M> & rhs) const noexcept {
+		if (real_size != rhs.size()) return false;
+		for (size_t i{0}; i != real_size; ++i) {
+			if (content[i] != rhs[i]) return false;
+		}
+		return true;
+	}
+	// three-way lexicographical comparison, ala std::basic_string_view::compare
+	template <size_t M> constexpr int compare(const fixed_string<M> & rhs) const noexcept {
+		const size_t common = real_size < rhs.size() ? real_size : rhs.size();
+		for (size_t i{0}; i != common; ++i) {
+			if (content[i] < rhs[i]) return -1;
+			if (content[i] > rhs[i]) return 1;
+		}
+		if (real_size < rhs.size()) return -1;
+		if (real_size > rhs.size()) return 1;
+		return 0;
+	}
+
+	// search
+	template <size_t M> constexpr size_t find(const fixed_string<M> & needle, size_t pos = 0) const noexcept {
+		if (pos > real_size) return npos;
+		if (needle.size() > real_size) return npos;
+		for (size_t i{pos}; i + needle.size() <= real_size; ++i) {
+			bool found = true;
+			for (size_t j{0}; j != needle.size(); ++j) {
+				if (content[i + j] != needle[j]) {
+					found = false;
+					break;
+				}
+			}
+			if (found) return i;
+		}
+		return npos;
+	}
+	constexpr size_t find(char32_t needle, size_t pos = 0) const noexcept {
+		for (size_t i{pos}; i < real_size; ++i) {
+			if (content[i] == needle) return i;
+		}
+		return npos;
+	}
+	template <size_t M> constexpr bool contains(const fixed_string<M> & needle) const noexcept {
+		return find(needle) != npos;
+	}
+	constexpr bool contains(char32_t needle) const noexcept {
+		return find(needle) != npos;
+	}
+	template <size_t M> constexpr bool starts_with(const fixed_string<M> & prefix) const noexcept {
+		if (prefix.size() > real_size) return false;
+		for (size_t i{0}; i != prefix.size(); ++i) {
+			if (content[i] != prefix[i]) return false;
+		}
+		return true;
+	}
+	constexpr bool starts_with(char32_t c) const noexcept {
+		return real_size != 0 && content[0] == c;
+	}
+	template <size_t M> constexpr bool ends_with(const fixed_string<M> & suffix) const noexcept {
+		if (suffix.size() > real_size) return false;
+		const size_t offset = real_size - suffix.size();
+		for (size_t i{0}; i != suffix.size(); ++i) {
+			if (content[offset + i] != suffix[i]) return false;
+		}
+		return true;
+	}
+	constexpr bool ends_with(char32_t c) const noexcept {
+		return real_size != 0 && content[real_size - 1] == c;
+	}
+
+	// substring: capacity is computed at compile time, content is clamped
+	// to the decoded size
+	template <size_t Pos, size_t Count = npos> constexpr auto substr() const noexcept {
+		constexpr size_t available_capacity = (Pos < N) ? (N - Pos) : 0;
+		constexpr size_t result_capacity = (Count < available_capacity) ? Count : available_capacity;
+		fixed_string<result_capacity> result;
+		size_t out{0};
+		for (size_t i{Pos}; i < real_size && out != result_capacity; ++i, ++out) {
+			result.content[out] = content[i];
+		}
+		result.real_size = out;
+		result.correct_flag = correct_flag;
+		return result;
+	}
+};
+
+template <typename CharT, size_t N> fixed_string(const CharT (&)[N]) -> fixed_string<N-1>;
+template <typename CharT, size_t N> fixed_string(const std::array<CharT,N> &) -> fixed_string<N>;
+
+template <size_t N> fixed_string(fixed_string<N>) -> fixed_string<N>;
+
+// equality (works across different capacities; compares decoded content)
+CTLL_EXPORT template <size_t A, size_t B> constexpr bool operator==(const fixed_string<A> & lhs, const fixed_string<B> & rhs) noexcept {
+	return lhs.is_same_as(rhs);
+}
+CTLL_EXPORT template <size_t A, size_t B> constexpr bool operator!=(const fixed_string<A> & lhs, const fixed_string<B> & rhs) noexcept {
+	return !lhs.is_same_as(rhs);
+}
+CTLL_EXPORT template <size_t A, typename CharT, size_t M> constexpr bool operator==(const fixed_string<A> & lhs, const CharT (&rhs)[M]) noexcept {
+	return lhs.is_same_as(fixed_string<M-1>(rhs));
+}
+CTLL_EXPORT template <size_t A, typename CharT, size_t M> constexpr bool operator!=(const fixed_string<A> & lhs, const CharT (&rhs)[M]) noexcept {
+	return !lhs.is_same_as(fixed_string<M-1>(rhs));
+}
+CTLL_EXPORT template <typename CharT, size_t M, size_t B> constexpr bool operator==(const CharT (&lhs)[M], const fixed_string<B> & rhs) noexcept {
+	return rhs.is_same_as(fixed_string<M-1>(lhs));
+}
+CTLL_EXPORT template <typename CharT, size_t M, size_t B> constexpr bool operator!=(const CharT (&lhs)[M], const fixed_string<B> & rhs) noexcept {
+	return !rhs.is_same_as(fixed_string<M-1>(lhs));
+}
+
+// lexicographical ordering
+CTLL_EXPORT template <size_t A, size_t B> constexpr bool operator<(const fixed_string<A> & lhs, const fixed_string<B> & rhs) noexcept {
+	return lhs.compare(rhs) < 0;
+}
+CTLL_EXPORT template <size_t A, size_t B> constexpr bool operator<=(const fixed_string<A> & lhs, const fixed_string<B> & rhs) noexcept {
+	return lhs.compare(rhs) <= 0;
+}
+CTLL_EXPORT template <size_t A, size_t B> constexpr bool operator>(const fixed_string<A> & lhs, const fixed_string<B> & rhs) noexcept {
+	return lhs.compare(rhs) > 0;
+}
+CTLL_EXPORT template <size_t A, size_t B> constexpr bool operator>=(const fixed_string<A> & lhs, const fixed_string<B> & rhs) noexcept {
+	return lhs.compare(rhs) >= 0;
+}
+
+// concatenation
+CTLL_EXPORT template <size_t A, size_t B> constexpr auto operator+(const fixed_string<A> & lhs, const fixed_string<B> & rhs) noexcept {
+	fixed_string<A + B> result;
+	size_t out{0};
+	for (size_t i{0}; i != lhs.size(); ++i) {
+		result.content[out++] = lhs[i];
+	}
+	for (size_t i{0}; i != rhs.size(); ++i) {
+		result.content[out++] = rhs[i];
+	}
+	result.real_size = out;
+	result.correct_flag = lhs.correct() && rhs.correct();
+	return result;
+}
+CTLL_EXPORT template <size_t A, typename CharT, size_t M> constexpr auto operator+(const fixed_string<A> & lhs, const CharT (&rhs)[M]) noexcept {
+	return lhs + fixed_string<M-1>(rhs);
+}
+CTLL_EXPORT template <typename CharT, size_t M, size_t B> constexpr auto operator+(const CharT (&lhs)[M], const fixed_string<B> & rhs) noexcept {
+	return fixed_string<M-1>(lhs) + rhs;
+}
+
+// iostream interoperability: the content is encoded as UTF-8 and written
+// with a single formatted output operation (so padding/width apply once)
+CTLL_EXPORT template <typename Traits, size_t N> std::basic_ostream<char, Traits> & operator<<(std::basic_ostream<char, Traits> & stream, const fixed_string<N> & string) {
+	char buffer[4 * (N ? N : 1)];
+	size_t out{0};
+	for (size_t i{0}; i != string.size(); ++i) {
+		const char32_t cp = string[i];
+		if (cp < 0x80) {
+			buffer[out++] = static_cast<char>(cp);
+		} else if (cp < 0x800) {
+			buffer[out++] = static_cast<char>(0xC0 | (cp >> 6));
+			buffer[out++] = static_cast<char>(0x80 | (cp & 0x3F));
+		} else if (cp < 0x10000) {
+			buffer[out++] = static_cast<char>(0xE0 | (cp >> 12));
+			buffer[out++] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+			buffer[out++] = static_cast<char>(0x80 | (cp & 0x3F));
+		} else {
+			buffer[out++] = static_cast<char>(0xF0 | (cp >> 18));
+			buffer[out++] = static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+			buffer[out++] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+			buffer[out++] = static_cast<char>(0x80 | (cp & 0x3F));
+		}
+	}
+	return stream << std::basic_string_view<char, Traits>(buffer, out);
+}
+
+}
+
+#endif
+
+#ifndef CTJSON_IN_A_MODULE
+#include <cstddef>
+#include <string_view>
+#include <type_traits>
+#endif
+
+// The document types a parse produces. The whole document is a TYPE -
+// every string, number and nesting level is encoded in template
+// parameters - so the values here are empty structs whose accessors are
+// all constexpr and static.
+//
+// String content is stored as UTF-8 bytes (escapes, including \uXXXX and
+// surrogate pairs, are decoded during parsing); numbers keep their raw
+// spelling and convert on demand.
+
+namespace ctjson {
+
+CTLL_EXPORT enum class kind {
+	object,
+	array,
+	string,
+	number,
+	boolean,
+	null
+};
+
+// --- string
+
+CTLL_EXPORT template <auto... Chars> struct string {
+	static constexpr kind type = kind::string;
+
+	// null-terminated so c_str()/data() work as C strings; size() excludes it
+	static constexpr char storage[sizeof...(Chars) + 1]{static_cast<char>(Chars)..., '\0'};
+
+	static constexpr const char * c_str() noexcept {
+		return storage;
+	}
+
+	static constexpr size_t size() noexcept {
+		return sizeof...(Chars);
+	}
+	static constexpr bool empty() noexcept {
+		return sizeof...(Chars) == 0;
+	}
+	static constexpr std::string_view view() noexcept {
+		return std::string_view{storage, sizeof...(Chars)};
+	}
+	constexpr operator std::string_view() const noexcept {
+		return view();
+	}
+	template <auto... Rhs> constexpr bool operator==(string<Rhs...>) const noexcept {
+		return view() == string<Rhs...>::view();
+	}
+	friend constexpr bool operator==(string, std::string_view rhs) noexcept {
+		return view() == rhs;
+	}
+	friend constexpr bool operator==(std::string_view lhs, string) noexcept {
+		return lhs == view();
+	}
+};
+
+// --- number (raw spelling, converted on demand)
+
+CTLL_EXPORT template <auto... Chars> struct number {
+	static constexpr kind type = kind::number;
+
+	// null-terminated so c_str() works as a C string; view() excludes it
+	static constexpr char storage[sizeof...(Chars) + 1]{static_cast<char>(Chars)..., '\0'};
+
+	static constexpr const char * c_str() noexcept {
+		return storage;
+	}
+
+	static constexpr std::string_view view() noexcept {
+		return std::string_view{storage, sizeof...(Chars)};
+	}
+
+	static constexpr bool is_integer() noexcept {
+		return ((Chars != '.' && Chars != 'e' && Chars != 'E') && ...);
+	}
+
+	template <typename T> static constexpr T to() noexcept {
+		constexpr std::string_view text = view();
+		size_t i = 0;
+		const bool negative = text[0] == '-';
+		if (negative) {
+			++i;
+		}
+		// mantissa: integer digits, then fraction digits shifting the
+		// decimal exponent down
+		unsigned long long mantissa = 0;
+		int exponent10 = 0;
+		for (; i < text.size() && text[i] >= '0' && text[i] <= '9'; ++i) {
+			mantissa = mantissa * 10 + static_cast<unsigned long long>(text[i] - '0');
+		}
+		if (i < text.size() && text[i] == '.') {
+			++i;
+			for (; i < text.size() && text[i] >= '0' && text[i] <= '9'; ++i) {
+				mantissa = mantissa * 10 + static_cast<unsigned long long>(text[i] - '0');
+				--exponent10;
+			}
+		}
+		if (i < text.size() && (text[i] == 'e' || text[i] == 'E')) {
+			++i;
+			bool exp_negative = false;
+			if (text[i] == '+' || text[i] == '-') {
+				exp_negative = text[i] == '-';
+				++i;
+			}
+			int exp_value = 0;
+			for (; i < text.size(); ++i) {
+				exp_value = exp_value * 10 + (text[i] - '0');
+			}
+			exponent10 += exp_negative ? -exp_value : exp_value;
+		}
+
+		if constexpr (std::is_integral_v<T>) {
+			long long value = static_cast<long long>(mantissa);
+			for (; exponent10 > 0; --exponent10) {
+				value *= 10;
+			}
+			for (; exponent10 < 0; ++exponent10) {
+				value /= 10; // truncates fractions, like a cast would
+			}
+			return static_cast<T>(negative ? -value : value);
+		} else {
+			long double value = static_cast<long double>(mantissa);
+			for (; exponent10 > 0; --exponent10) {
+				value *= 10.0L;
+			}
+			for (; exponent10 < 0; ++exponent10) {
+				value /= 10.0L;
+			}
+			return static_cast<T>(negative ? -value : value);
+		}
+	}
+};
+
+// --- boolean and null
+
+CTLL_EXPORT template <bool Value> struct boolean {
+	static constexpr kind type = kind::boolean;
+	static constexpr bool value = Value;
+	constexpr operator bool() const noexcept {
+		return Value;
+	}
+};
+
+CTLL_EXPORT struct null {
+	static constexpr kind type = kind::null;
+};
+
+// --- array
+
+CTLL_EXPORT template <typename... Values> struct array {
+	static constexpr kind type = kind::array;
+
+	static constexpr size_t size() noexcept {
+		return sizeof...(Values);
+	}
+	static constexpr bool empty() noexcept {
+		return sizeof...(Values) == 0;
+	}
+
+	template <size_t Index> static constexpr auto get() noexcept {
+		static_assert(Index < sizeof...(Values), "ctjson: array index out of range");
+		return nth<Index, Values...>();
+	}
+
+private:
+	template <size_t Index, typename Head, typename... Tail> static constexpr auto nth() noexcept {
+		if constexpr (Index == 0) {
+			return Head{};
+		} else {
+			return nth<Index - 1, Tail...>();
+		}
+	}
+};
+
+// --- object
+
+CTLL_EXPORT template <typename Key, typename Value> struct member {
+	using key_type = Key;
+	using value_type = Value;
+};
+
+CTLL_EXPORT template <typename... Members> struct object {
+	static constexpr kind type = kind::object;
+
+	static constexpr size_t size() noexcept {
+		return sizeof...(Members);
+	}
+	static constexpr bool empty() noexcept {
+		return sizeof...(Members) == 0;
+	}
+
+#if CTLL_CNTTP_COMPILER_CHECK
+	template <ctll::fixed_string Name> static constexpr bool contains() noexcept {
+		return (key_matches<Name, Members>() || ...);
+	}
+
+	// the value of the member with this key; a missing key is a
+	// compile-time error (check contains<Name>() first when unsure)
+	template <ctll::fixed_string Name> static constexpr auto get() noexcept {
+		static_assert((key_matches<Name, Members>() || ...), "ctjson: no member with this key");
+		return find<Name, Members...>();
+	}
+#else
+	// C++17: the key is a ctll::fixed_string variable with linkage
+	template <const auto & Name> static constexpr bool contains() noexcept {
+		return (key_matches<Name, Members>() || ...);
+	}
+	template <const auto & Name> static constexpr auto get() noexcept {
+		static_assert((key_matches<Name, Members>() || ...), "ctjson: no member with this key");
+		return find<Name, Members...>();
+	}
+#endif
+
+	// positional access, for iterating members
+	template <size_t Index> static constexpr auto key() noexcept {
+		static_assert(Index < sizeof...(Members), "ctjson: member index out of range");
+		return typename decltype(nth<Index, Members...>())::key_type{};
+	}
+	template <size_t Index> static constexpr auto value() noexcept {
+		static_assert(Index < sizeof...(Members), "ctjson: member index out of range");
+		return typename decltype(nth<Index, Members...>())::value_type{};
+	}
+
+private:
+#if CTLL_CNTTP_COMPILER_CHECK
+	template <ctll::fixed_string Name, typename Member> static constexpr bool key_matches() noexcept {
+#else
+	template <const auto & Name, typename Member> static constexpr bool key_matches() noexcept {
+#endif
+		constexpr auto key_view = Member::key_type::view();
+		if (Name.size() != key_view.size()) {
+			return false;
+		}
+		for (size_t i = 0; i < key_view.size(); ++i) {
+			if (static_cast<char32_t>(static_cast<unsigned char>(key_view[i])) != Name[i]) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+#if CTLL_CNTTP_COMPILER_CHECK
+	template <ctll::fixed_string Name, typename Head, typename... Tail> static constexpr auto find() noexcept {
+#else
+	template <const auto & Name, typename Head, typename... Tail> static constexpr auto find() noexcept {
+#endif
+		if constexpr (key_matches<Name, Head>()) {
+			return typename Head::value_type{};
+		} else {
+			return find<Name, Tail...>();
+		}
+	}
+
+	template <size_t Index, typename Head, typename... Tail> static constexpr auto nth() noexcept {
+		if constexpr (Index == 0) {
+			return Head{};
+		} else {
+			return nth<Index - 1, Tail...>();
+		}
+	}
+};
+
+// compile-time iteration: the callable is invoked once per element
+// (arrays) or once per key/value pair (objects), each with its own type
+CTLL_EXPORT template <typename F, typename... Values> constexpr void for_each(array<Values...>, F && f) {
+	(f(Values{}), ...);
+}
+
+CTLL_EXPORT template <typename F, typename... Members> constexpr void for_each(object<Members...>, F && f) {
+	(f(typename Members::key_type{}, typename Members::value_type{}), ...);
+}
+
+} // namespace ctjson
+
+#endif
+
+#ifndef CTJSON_IN_A_MODULE
+#include <algorithm>
+#include <charconv>
+#include <cmath>
+#include <cstdio>
+#include <optional>
+#include <ostream>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
+#endif
+
+// A runtime encoder in the style of Python's json module:
+//
+//   ctjson::dumps(std::map<std::string, std::vector<int>>{{"a", {1, 2}}})
+//       == R"({"a": [1, 2]})"                       // Python's separators
+//   ctjson::dumps(value, 2)                          // indent=2 pretty print
+//   ctjson::dumps(value, {.indent=2, .sort_keys=true, .ensure_ascii=true})
+//   ctjson::dump(value, stream, ...)                 // like json.dump
+//
+// What Python's encoder accepts maps to C++ like this:
+//
+//   dict  -> any map-like container (keys: string-like, or arithmetic,
+//            which are quoted like Python does for int/float keys)
+//   list  -> any iterable container, std::pair, std::tuple
+//   str   -> std::string, std::string_view, const char *, char
+//   int   -> integral types        float -> floating point types
+//   None  -> nullptr, an empty std::optional
+//   plus: std::variant (the active alternative), the ctjson document
+//   types themselves (numbers keep their parsed spelling), and any type
+//   with an ADL-findable to_json(value) returning something dumpable -
+//   the equivalent of Python's default= hook.
+//
+// Divergences from Python, on purpose: ensure_ascii defaults to false
+// (UTF-8 passes through; switch it on for \uXXXX output, surrogate
+// pairs included), and the result is a std::string. NaN and infinities
+// render as NaN/Infinity/-Infinity exactly like Python's default
+// allow_nan=True.
+
+namespace ctjson {
+
+CTLL_EXPORT struct dump_options {
+	int indent = -1;          // negative: one line with ", " separators
+	bool sort_keys = false;
+	bool ensure_ascii = false;
+};
+
+namespace detail {
+
+template <typename T, typename = void> struct is_iterable: std::false_type { };
+template <typename T> struct is_iterable<T, std::void_t<decltype(std::begin(std::declval<const T &>())), decltype(std::end(std::declval<const T &>()))>>: std::true_type { };
+
+template <typename T, typename = void> struct is_map_like: std::false_type { };
+template <typename T> struct is_map_like<T, std::void_t<typename T::key_type, typename T::mapped_type, decltype(std::begin(std::declval<const T &>()))>>: std::true_type { };
+
+template <typename T, typename = void> struct is_tuple_like: std::false_type { };
+template <typename T> struct is_tuple_like<T, std::void_t<decltype(std::tuple_size<T>::value)>>: std::true_type { };
+
+template <typename T> struct is_optional: std::false_type { };
+template <typename T> struct is_optional<std::optional<T>>: std::true_type { };
+
+template <typename T> struct is_variant: std::false_type { };
+template <typename... Ts> struct is_variant<std::variant<Ts...>>: std::true_type { };
+
+template <typename T, typename = void> struct is_document: std::false_type { };
+template <typename T> struct is_document<T, std::void_t<decltype(T::type)>>: std::is_same<std::remove_cv_t<decltype(T::type)>, kind> { };
+
+template <typename T, typename = void> struct has_adl_to_json: std::false_type { };
+template <typename T> struct has_adl_to_json<T, std::void_t<decltype(to_json(std::declval<const T &>()))>>: std::true_type { };
+
+template <typename> inline constexpr bool not_dumpable = false;
+
+struct dumper {
+	std::string out;
+	dump_options options;
+
+	bool pretty() const noexcept {
+		return options.indent >= 0;
+	}
+	void newline(int depth) {
+		out += '\n';
+		out.append(static_cast<size_t>(options.indent) * static_cast<size_t>(depth), ' ');
+	}
+	void item_separator(int depth) {
+		if (pretty()) {
+			out += ',';
+			newline(depth);
+		} else {
+			out += ", ";
+		}
+	}
+
+	// --- strings
+
+	void escape_unit(char32_t code_point) {
+		constexpr char hex[] = "0123456789abcdef";
+		char buffer[7]{'\\', 'u', hex[(code_point >> 12) & 0xF], hex[(code_point >> 8) & 0xF], hex[(code_point >> 4) & 0xF], hex[code_point & 0xF], 0};
+		out += buffer;
+	}
+
+	void write_string(std::string_view text) {
+		out += '"';
+		for (size_t i = 0; i < text.size(); ++i) {
+			const char c = text[i];
+			const auto byte = static_cast<unsigned char>(c);
+			switch (c) {
+				case '"': out += "\\\""; continue;
+				case '\\': out += "\\\\"; continue;
+				case '\b': out += "\\b"; continue;
+				case '\f': out += "\\f"; continue;
+				case '\n': out += "\\n"; continue;
+				case '\r': out += "\\r"; continue;
+				case '\t': out += "\\t"; continue;
+				default: break;
+			}
+			if (byte < 0x20) {
+				escape_unit(byte);
+			} else if (byte < 0x80 || !options.ensure_ascii) {
+				out += c;
+			} else {
+				// ensure_ascii: decode the UTF-8 sequence and emit \uXXXX
+				// (a surrogate pair above the BMP); a byte that is not
+				// valid UTF-8 is escaped on its own
+				size_t continuation = byte >= 0xF0 ? 3 : byte >= 0xE0 ? 2 : byte >= 0xC0 ? 1 : 0;
+				char32_t code_point = byte & (byte >= 0xF0 ? 0x07 : byte >= 0xE0 ? 0x0F : byte >= 0xC0 ? 0x1F : 0xFF);
+				bool valid = continuation != 0 && i + continuation < text.size();
+				for (size_t k = 1; valid && k <= continuation; ++k) {
+					const auto follow = static_cast<unsigned char>(text[i + k]);
+					if ((follow & 0xC0) != 0x80) {
+						valid = false;
+					} else {
+						code_point = (code_point << 6) | (follow & 0x3F);
+					}
+				}
+				if (!valid) {
+					escape_unit(byte);
+				} else if (code_point < 0x10000) {
+					escape_unit(code_point);
+					i += continuation;
+				} else {
+					escape_unit(static_cast<char32_t>(0xD800 + ((code_point - 0x10000) >> 10)));
+					escape_unit(static_cast<char32_t>(0xDC00 + ((code_point - 0x10000) & 0x3FF)));
+					i += continuation;
+				}
+			}
+		}
+		out += '"';
+	}
+
+	// --- numbers
+
+	template <typename T> void write_integer(T value) {
+		char buffer[32];
+		const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
+		out.append(buffer, result.ptr);
+	}
+
+	void write_floating(double value) {
+		if (std::isnan(value)) {
+			out += "NaN"; // like Python's allow_nan=True
+			return;
+		}
+		if (std::isinf(value)) {
+			out += value < 0 ? "-Infinity" : "Infinity";
+			return;
+		}
+		char buffer[64];
+		const char * begin = buffer;
+		const char * end = buffer;
+#if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
+		end = std::to_chars(buffer, buffer + sizeof(buffer), value).ptr;
+#else
+		end = buffer + std::snprintf(buffer, sizeof(buffer), "%.17g", value);
+#endif
+		out.append(begin, end);
+		// Python's repr keeps floats visibly floats: 1.0, not 1
+		bool looks_integral = true;
+		for (const char * it = begin; it != end; ++it) {
+			if (*it == '.' || *it == 'e' || *it == 'E') {
+				looks_integral = false;
+			}
+		}
+		if (looks_integral) {
+			out += ".0";
+		}
+	}
+
+	// --- the object/array shells (used by containers and documents)
+
+	template <typename WriteItems> void write_array_shell(size_t count, int depth, WriteItems && write_items) {
+		if (count == 0) {
+			out += "[]";
+			return;
+		}
+		out += '[';
+		if (pretty()) {
+			newline(depth + 1);
+		}
+		write_items();
+		if (pretty()) {
+			newline(depth);
+		}
+		out += ']';
+	}
+
+	template <typename WriteItems> void write_object_shell(size_t count, int depth, WriteItems && write_items) {
+		if (count == 0) {
+			out += "{}";
+			return;
+		}
+		out += '{';
+		if (pretty()) {
+			newline(depth + 1);
+		}
+		write_items();
+		if (pretty()) {
+			newline(depth);
+		}
+		out += '}';
+	}
+
+	// members arrive as already-rendered (key token, value) strings so
+	// sort_keys can reorder them regardless of the source container
+	void write_members(std::vector<std::pair<std::string, std::string>> && members, int depth) {
+		if (options.sort_keys) {
+			std::sort(members.begin(), members.end(), [](const auto & a, const auto & b) { return a.first < b.first; });
+		}
+		write_object_shell(members.size(), depth, [&] {
+			bool first = true;
+			for (const auto & entry : members) {
+				if (!first) {
+					item_separator(depth + 1);
+				}
+				first = false;
+				out += entry.first;
+				out += ": ";
+				out += entry.second;
+			}
+		});
+	}
+
+	template <typename Key> std::string render_key(const Key & key) {
+		dumper sub{{}, options};
+		if constexpr (std::is_convertible_v<const Key &, std::string_view>) {
+			sub.write_string(std::string_view(key));
+		} else if constexpr (std::is_same_v<std::remove_cv_t<Key>, char>) {
+			sub.write_string(std::string_view(&key, 1));
+		} else if constexpr (std::is_arithmetic_v<Key> && !std::is_same_v<std::remove_cv_t<Key>, bool>) {
+			// Python quotes numeric keys: {1: "x"} dumps as {"1": "x"}
+			sub.out += '"';
+			sub.value(key, 0);
+			sub.out += '"';
+		} else {
+			static_assert(not_dumpable<Key>, "ctjson::dumps: object keys must be strings or numbers");
+		}
+		return std::move(sub.out);
+	}
+
+	template <typename T> std::string render_value(const T & value_to_render, int depth) {
+		dumper sub{{}, options};
+		sub.value(value_to_render, depth);
+		return std::move(sub.out);
+	}
+
+	// --- ctjson document values
+
+	template <typename Node> void document(Node node, int depth) {
+		if constexpr (Node::type == kind::object) {
+			std::vector<std::pair<std::string, std::string>> members;
+			for_each(node, [&](auto key, auto member_value) {
+				members.emplace_back(render_key(key.view()), render_value(member_value, depth + 1));
+			});
+			write_members(std::move(members), depth);
+		} else if constexpr (Node::type == kind::array) {
+			write_array_shell(Node::size(), depth, [&] {
+				bool first = true;
+				for_each(node, [&](auto element) {
+					if (!first) {
+						item_separator(depth + 1);
+					}
+					first = false;
+					value(element, depth + 1);
+				});
+			});
+		} else if constexpr (Node::type == kind::string) {
+			write_string(Node::view());
+		} else if constexpr (Node::type == kind::number) {
+			out += Node::view(); // the spelling it was parsed with
+		} else if constexpr (Node::type == kind::boolean) {
+			out += Node::value ? "true" : "false";
+		} else {
+			out += "null";
+		}
+	}
+
+	// --- the dispatcher
+
+	template <typename T> void value(const T & v, int depth) {
+		using D = std::remove_cv_t<std::remove_reference_t<T>>;
+		if constexpr (has_adl_to_json<D>::value) {
+			value(to_json(v), depth);
+		} else if constexpr (is_document<D>::value) {
+			document(v, depth);
+		} else if constexpr (std::is_same_v<D, std::nullptr_t>) {
+			out += "null";
+		} else if constexpr (std::is_same_v<D, bool>) {
+			out += v ? "true" : "false";
+		} else if constexpr (std::is_same_v<D, char>) {
+			write_string(std::string_view(&v, 1));
+		} else if constexpr (std::is_integral_v<D>) {
+			write_integer(v);
+		} else if constexpr (std::is_floating_point_v<D>) {
+			write_floating(static_cast<double>(v));
+		} else if constexpr (std::is_convertible_v<const D &, std::string_view>) {
+			write_string(std::string_view(v));
+		} else if constexpr (is_optional<D>::value) {
+			if (v) {
+				value(*v, depth);
+			} else {
+				out += "null";
+			}
+		} else if constexpr (is_variant<D>::value) {
+			std::visit([&](const auto & alternative) { value(alternative, depth); }, v);
+		} else if constexpr (is_map_like<D>::value) {
+			std::vector<std::pair<std::string, std::string>> members;
+			for (const auto & entry : v) {
+				members.emplace_back(render_key(entry.first), render_value(entry.second, depth + 1));
+			}
+			write_members(std::move(members), depth);
+		} else if constexpr (is_iterable<D>::value) {
+			size_t count = 0;
+			for (const auto & element : v) {
+				(void)element;
+				++count;
+			}
+			write_array_shell(count, depth, [&] {
+				bool first = true;
+				for (const auto & element : v) {
+					if (!first) {
+						item_separator(depth + 1);
+					}
+					first = false;
+					value(element, depth + 1);
+				}
+			});
+		} else if constexpr (is_tuple_like<D>::value) {
+			write_array_shell(std::tuple_size<D>::value, depth, [&] {
+				bool first = true;
+				std::apply([&](const auto &... elements) {
+					(((!first ? item_separator(depth + 1) : void()), first = false, value(elements, depth + 1)), ...);
+				}, v);
+			});
+		} else {
+			static_assert(not_dumpable<D>, "ctjson::dumps: this type is not JSON serializable; provide a to_json(const T &) found by ADL");
+		}
+	}
+};
+
+} // namespace detail
+
+// like json.dumps: encode a value as a JSON string
+CTLL_EXPORT template <typename T> std::string dumps(const T & value, dump_options options) {
+	detail::dumper d{{}, options};
+	d.value(value, 0);
+	return std::move(d.out);
+}
+
+CTLL_EXPORT template <typename T> std::string dumps(const T & value) {
+	return dumps(value, dump_options{});
+}
+
+CTLL_EXPORT template <typename T> std::string dumps(const T & value, int indent) {
+	dump_options options;
+	options.indent = indent;
+	return dumps(value, options);
+}
+
+// like json.dump: encode into a stream
+CTLL_EXPORT template <typename T> void dump(const T & value, std::ostream & stream, dump_options options) {
+	stream << dumps(value, options);
+}
+
+CTLL_EXPORT template <typename T> void dump(const T & value, std::ostream & stream) {
+	dump(value, stream, dump_options{});
+}
+
+CTLL_EXPORT template <typename T> void dump(const T & value, std::ostream & stream, int indent) {
+	dump_options options;
+	options.indent = indent;
+	dump(value, stream, options);
+}
+
+} // namespace ctjson
+
+#endif
+
 // ctjson: compile-time JSON.
 //
 //   constexpr auto doc = ctjson::parse<R"({"name":"Hana","tags":[1,2,3]})">();
@@ -4751,6 +5925,17 @@ CTLL_EXPORT template <CTJSON_STRING_INPUT input> constexpr auto parse() noexcept
 	static_assert(parsed(), "ctjson: the input is not valid JSON");
 	return ctll::front(typename parsed::output_type::stack_type{});
 }
+
+// like json.loads, for symmetry with dumps: parse compile-time text
+#if CTLL_CNTTP_COMPILER_CHECK
+CTLL_EXPORT template <ctll::fixed_string input> constexpr auto loads() noexcept {
+	return parse<input>();
+}
+#else
+CTLL_EXPORT template <const auto & input> constexpr auto loads() noexcept {
+	return parse<input>();
+}
+#endif
 
 } // namespace ctjson
 

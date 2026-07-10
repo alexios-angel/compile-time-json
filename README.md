@@ -70,6 +70,33 @@ ctjson::for_each(doc, [](auto key, auto value) { ... });
 `serialize` re-emits strings with the mandatory escapes and numbers with
 the spelling they were parsed with; the result is null-terminated.
 
+## Python-style runtime API
+
+`ctjson::dumps` is `json.dumps` for ordinary C++ values, with output
+verified byte-identical against CPython:
+
+```c++
+ctjson::dumps(std::map<std::string, std::vector<int>>{{"a", {1, 2}}});
+//  -> {"a": [1, 2]}                        (Python's separators)
+ctjson::dumps(value, 2);                    // indent=2 pretty printing
+ctjson::dumps(value, {.indent = 2, .sort_keys = true, .ensure_ascii = true});
+ctjson::dump(value, stream);                // json.dump, onto a std::ostream
+ctjson::loads<"[1, 2]">();                  // parse, under its Python name
+```
+
+The encoder accepts what Python's does: map-likes become objects
+(arithmetic keys are quoted, `{1: "x"}` style), iterables plus
+`std::pair`/`std::tuple` become arrays, string-likes and `char` become
+strings, integral and floating-point values become numbers (floats stay
+visibly floats: `1.0`, and NaN/Infinity render like Python's
+`allow_nan=True`), `nullptr` and empty `std::optional` become `null`,
+`std::variant` dumps its active alternative, and parsed ctjson
+documents dump directly (numbers keeping their parsed spelling). For
+anything else, define a `to_json(const T &)` findable by ADL returning
+something dumpable — the `default=` hook. One deliberate divergence:
+`ensure_ascii` defaults to **false** (UTF-8 passes through); switch it
+on for Python's `\uXXXX` output, surrogate pairs included.
+
 Details:
 
 * String content is stored as UTF-8 bytes. All escapes are decoded at

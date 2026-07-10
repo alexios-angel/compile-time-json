@@ -6,6 +6,7 @@
 #include "ctjson/types.hpp"
 #include "ctjson/actions.hpp"
 #include "ctjson/serialize.hpp"
+#include "ctjson/dumps.hpp"
 
 // ctjson: compile-time JSON.
 //
@@ -43,6 +44,17 @@ CTLL_EXPORT template <CTJSON_STRING_INPUT input> constexpr auto parse() noexcept
 	static_assert(parsed(), "ctjson: the input is not valid JSON");
 	return ctll::front(typename parsed::output_type::stack_type{});
 }
+
+// like json.loads, for symmetry with dumps: parse compile-time text
+#if CTLL_CNTTP_COMPILER_CHECK
+CTLL_EXPORT template <ctll::fixed_string input> constexpr auto loads() noexcept {
+	return parse<input>();
+}
+#else
+CTLL_EXPORT template <const auto & input> constexpr auto loads() noexcept {
+	return parse<input>();
+}
+#endif
 
 } // namespace ctjson
 
