@@ -5491,9 +5491,7 @@ CTLL_EXPORT template <typename F, typename... Members> constexpr void for_each(o
 
 #ifndef CTJSON_IN_A_MODULE
 #include <algorithm>
-#include <charconv>
-#include <cmath>
-#include <cstdio>
+#include <cstring>
 #include <optional>
 #include <ostream>
 #include <string>
@@ -5503,6 +5501,9 @@ CTLL_EXPORT template <typename F, typename... Members> constexpr void for_each(o
 #include <utility>
 #include <variant>
 #include <vector>
+#if defined(__cpp_lib_bit_cast)
+#include <bit>
+#endif
 #endif
 
 // A runtime encoder in the style of Python's json module:
@@ -5526,11 +5527,28 @@ CTLL_EXPORT template <typename F, typename... Members> constexpr void for_each(o
 //   with an ADL-findable to_json(value) returning something dumpable -
 //   the equivalent of Python's default= hook.
 //
-// Divergences from Python, on purpose: ensure_ascii defaults to false
-// (UTF-8 passes through; switch it on for \uXXXX output, surrogate
-// pairs included), and the result is a std::string. NaN and infinities
-// render as NaN/Infinity/-Infinity exactly like Python's default
-// allow_nan=True.
+// dumps is constexpr: with C++20 library support (constexpr std::string
+// and std::vector) whole encodings can be static_asserted. To make that
+// possible - and to match Python bit for bit - floating point values are
+// rendered by a built-in constexpr Dragon4 (shortest round-tripping
+// digits, exact big-integer arithmetic) and formatted with float.repr's
+// rule: scientific only below 1e-4 or at 1e16 and above, and floats stay
+// visibly floats (1.0). NaN and infinities render as
+// NaN/Infinity/-Infinity exactly like Python's default allow_nan=True.
+// dump() targets a std::ostream and is therefore runtime-only.
+//
+// One divergence from Python, on purpose: ensure_ascii defaults to false
+// (UTF-8 passes through; switch it on for \uXXXX output, surrogate pairs
+// included).
+
+// dumps builds std::strings, so it is constexpr exactly where the
+// standard library's constexpr string/vector support exists (C++20)
+#if defined(__cpp_lib_constexpr_string) && __cpp_lib_constexpr_string >= 201907L \
+ && defined(__cpp_lib_constexpr_vector) && __cpp_lib_constexpr_vector >= 201907L
+#define CTJSON_DUMPS_CONSTEXPR constexpr
+#else
+#define CTJSON_DUMPS_CONSTEXPR
+#endif
 
 namespace ctjson {
 
@@ -5565,18 +5583,273 @@ template <typename T> struct has_adl_to_json<T, std::void_t<decltype(to_json(std
 
 template <typename> inline constexpr bool not_dumpable = false;
 
+// --- shortest round-tripping float formatting (Dragon4)
+//
+// Exact big-integer arithmetic over the scaled value and its half-ulp
+// boundaries produces the fewest digits that parse back to the same
+// double, entirely within constant evaluation. 1280 bits comfortably
+// hold every intermediate for IEEE double.
+
+constexpr unsigned long long double_bits(double value) noexcept {
+#if defined(__cpp_lib_bit_cast)
+	return std::bit_cast<unsigned long long>(value);
+#elif defined(__has_builtin) && __has_builtin(__builtin_bit_cast)
+	return __builtin_bit_cast(unsigned long long, value);
+#else
+	// runtime-only fallback for old toolchains
+	unsigned long long result = 0;
+	std::memcpy(&result, &value, sizeof(result));
+	return result;
+#endif
+}
+
+struct bignum {
+	unsigned int limbs[40]{};
+	int count = 0;
+
+	constexpr bignum() = default;
+
+	constexpr bignum(unsigned long long value) {
+		while (value != 0) {
+			limbs[count++] = static_cast<unsigned int>(value & 0xFFFFFFFFu);
+			value >>= 32;
+		}
+	}
+
+	constexpr bool is_zero() const noexcept {
+		return count == 0;
+	}
+
+	constexpr void shift_left(int bits) {
+		const int limb_shift = bits / 32;
+		const int bit_shift = bits % 32;
+		if (count == 0) {
+			return;
+		}
+		for (int i = count + limb_shift; i >= 0; --i) {
+			unsigned long long assembled = 0;
+			if (i - limb_shift >= 0 && i - limb_shift < count) {
+				assembled = static_cast<unsigned long long>(limbs[i - limb_shift]) << bit_shift;
+			}
+			if (bit_shift != 0 && i - limb_shift - 1 >= 0 && i - limb_shift - 1 < count) {
+				assembled |= limbs[i - limb_shift - 1] >> (32 - bit_shift);
+			}
+			if (i < 40) {
+				limbs[i] = static_cast<unsigned int>(assembled & 0xFFFFFFFFu);
+			}
+		}
+		count += limb_shift + 1;
+		if (count > 40) {
+			count = 40;
+		}
+		while (count > 0 && limbs[count - 1] == 0) {
+			--count;
+		}
+	}
+
+	constexpr void multiply_small(unsigned int factor) {
+		unsigned long long carry = 0;
+		for (int i = 0; i < count; ++i) {
+			carry += static_cast<unsigned long long>(limbs[i]) * factor;
+			limbs[i] = static_cast<unsigned int>(carry & 0xFFFFFFFFu);
+			carry >>= 32;
+		}
+		while (carry != 0 && count < 40) {
+			limbs[count++] = static_cast<unsigned int>(carry & 0xFFFFFFFFu);
+			carry >>= 32;
+		}
+	}
+
+	friend constexpr int compare(const bignum & lhs, const bignum & rhs) noexcept {
+		if (lhs.count != rhs.count) {
+			return lhs.count < rhs.count ? -1 : 1;
+		}
+		for (int i = lhs.count - 1; i >= 0; --i) {
+			if (lhs.limbs[i] != rhs.limbs[i]) {
+				return lhs.limbs[i] < rhs.limbs[i] ? -1 : 1;
+			}
+		}
+		return 0;
+	}
+
+	friend constexpr bignum add(const bignum & lhs, const bignum & rhs) {
+		bignum result;
+		unsigned long long carry = 0;
+		const int limit = lhs.count > rhs.count ? lhs.count : rhs.count;
+		for (int i = 0; i < limit; ++i) {
+			carry += (i < lhs.count ? lhs.limbs[i] : 0u);
+			carry += (i < rhs.count ? rhs.limbs[i] : 0u);
+			result.limbs[i] = static_cast<unsigned int>(carry & 0xFFFFFFFFu);
+			carry >>= 32;
+		}
+		result.count = limit;
+		if (carry != 0 && result.count < 40) {
+			result.limbs[result.count++] = static_cast<unsigned int>(carry);
+		}
+		return result;
+	}
+
+	// requires *this >= rhs
+	constexpr void subtract(const bignum & rhs) {
+		long long borrow = 0;
+		for (int i = 0; i < count; ++i) {
+			long long diff = static_cast<long long>(limbs[i]) - (i < rhs.count ? rhs.limbs[i] : 0u) - borrow;
+			borrow = diff < 0 ? 1 : 0;
+			limbs[i] = static_cast<unsigned int>(diff + (borrow << 32));
+		}
+		while (count > 0 && limbs[count - 1] == 0) {
+			--count;
+		}
+	}
+};
+
+struct decimal_digits {
+	char digits[20]{};
+	int length = 0;
+	int point = 0; // value = 0.digits x 10^point
+};
+
+// shortest digits for a positive, finite double (Burger & Dybvig style)
+constexpr decimal_digits shortest_digits(unsigned long long mantissa, int exponent2, bool boundary_is_closer) {
+	const bool even = (mantissa & 1) == 0;
+
+	bignum numerator;   // value = numerator / denominator
+	bignum denominator;
+	bignum margin_high; // half-gap up, over the same denominator
+	bignum margin_low;  // half-gap down
+
+	if (exponent2 >= 0) {
+		if (!boundary_is_closer) {
+			numerator = bignum(mantissa);
+			numerator.shift_left(exponent2 + 1);
+			denominator = bignum(2);
+			margin_high = bignum(1);
+			margin_high.shift_left(exponent2);
+			margin_low = margin_high;
+		} else {
+			numerator = bignum(mantissa);
+			numerator.shift_left(exponent2 + 2);
+			denominator = bignum(4);
+			margin_high = bignum(1);
+			margin_high.shift_left(exponent2 + 1);
+			margin_low = bignum(1);
+			margin_low.shift_left(exponent2);
+		}
+	} else {
+		if (!boundary_is_closer) {
+			numerator = bignum(mantissa);
+			numerator.shift_left(1);
+			denominator = bignum(1);
+			denominator.shift_left(1 - exponent2);
+			margin_high = bignum(1);
+			margin_low = bignum(1);
+		} else {
+			numerator = bignum(mantissa);
+			numerator.shift_left(2);
+			denominator = bignum(1);
+			denominator.shift_left(2 - exponent2);
+			margin_high = bignum(2);
+			margin_low = bignum(1);
+		}
+	}
+
+	decimal_digits result;
+
+	// scale so that the first extracted digit is the first significant one
+	const auto high_hits = [&](const bignum & sum, const bignum & against) {
+		const int c = compare(sum, against);
+		return even ? c >= 0 : c > 0;
+	};
+	while (high_hits(add(numerator, margin_high), denominator)) {
+		denominator.multiply_small(10);
+		++result.point;
+	}
+	for (;;) {
+		bignum scaled = add(numerator, margin_high);
+		scaled.multiply_small(10);
+		const int c = compare(scaled, denominator);
+		if (even ? c <= 0 : c < 0) {
+			numerator.multiply_small(10);
+			margin_high.multiply_small(10);
+			margin_low.multiply_small(10);
+			--result.point;
+		} else {
+			break;
+		}
+	}
+
+	// digit loop: emit until the value is inside both half-gap bounds
+	for (;;) {
+		numerator.multiply_small(10);
+		margin_high.multiply_small(10);
+		margin_low.multiply_small(10);
+
+		int digit = 0;
+		while (compare(numerator, denominator) >= 0) {
+			numerator.subtract(denominator);
+			++digit;
+		}
+
+		const int low_compare = compare(numerator, margin_low);
+		const bool low = even ? low_compare <= 0 : low_compare < 0;
+		const bool high = high_hits(add(numerator, margin_high), denominator);
+
+		if (!low && !high) {
+			result.digits[result.length++] = static_cast<char>('0' + digit);
+			continue;
+		}
+
+		if (low && !high) {
+			// round down
+		} else if (high && !low) {
+			++digit; // round up
+		} else {
+			// both bounds hit: round to nearest, ties to even digit
+			bignum doubled = numerator;
+			doubled.multiply_small(2);
+			const int c = compare(doubled, denominator);
+			if (c > 0 || (c == 0 && (digit & 1) != 0)) {
+				++digit;
+			}
+		}
+		result.digits[result.length++] = static_cast<char>('0' + digit);
+		break;
+	}
+
+	// a final round-up may carry through stored digits
+	int index = result.length - 1;
+	while (index >= 0 && result.digits[index] == '9' + 1) {
+		result.digits[index] = '0';
+		if (index == 0) {
+			// 999... became 1000...: one leading digit, exponent bump
+			result.digits[0] = '1';
+			result.length = 1;
+			++result.point;
+			return result;
+		}
+		++result.digits[index - 1];
+		--index;
+	}
+	while (result.length > 1 && result.digits[result.length - 1] == '0') {
+		--result.length;
+	}
+	return result;
+}
+
+template <typename> inline constexpr bool no_constexpr_float_path = false;
+
 struct dumper {
 	std::string out;
 	dump_options options;
 
-	bool pretty() const noexcept {
+	CTJSON_DUMPS_CONSTEXPR bool pretty() const noexcept {
 		return options.indent >= 0;
 	}
-	void newline(int depth) {
+	CTJSON_DUMPS_CONSTEXPR void newline(int depth) {
 		out += '\n';
 		out.append(static_cast<size_t>(options.indent) * static_cast<size_t>(depth), ' ');
 	}
-	void item_separator(int depth) {
+	CTJSON_DUMPS_CONSTEXPR void item_separator(int depth) {
 		if (pretty()) {
 			out += ',';
 			newline(depth);
@@ -5587,13 +5860,13 @@ struct dumper {
 
 	// --- strings
 
-	void escape_unit(char32_t code_point) {
+	CTJSON_DUMPS_CONSTEXPR void escape_unit(char32_t code_point) {
 		constexpr char hex[] = "0123456789abcdef";
-		char buffer[7]{'\\', 'u', hex[(code_point >> 12) & 0xF], hex[(code_point >> 8) & 0xF], hex[(code_point >> 4) & 0xF], hex[code_point & 0xF], 0};
-		out += buffer;
+		const char buffer[7]{'\\', 'u', hex[(code_point >> 12) & 0xF], hex[(code_point >> 8) & 0xF], hex[(code_point >> 4) & 0xF], hex[code_point & 0xF], 0};
+		out.append(buffer, 6);
 	}
 
-	void write_string(std::string_view text) {
+	CTJSON_DUMPS_CONSTEXPR void write_string(std::string_view text) {
 		out += '"';
 		for (size_t i = 0; i < text.size(); ++i) {
 			const char c = text[i];
@@ -5644,45 +5917,96 @@ struct dumper {
 
 	// --- numbers
 
-	template <typename T> void write_integer(T value) {
-		char buffer[32];
-		const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
-		out.append(buffer, result.ptr);
-	}
-
-	void write_floating(double value) {
-		if (std::isnan(value)) {
-			out += "NaN"; // like Python's allow_nan=True
-			return;
-		}
-		if (std::isinf(value)) {
-			out += value < 0 ? "-Infinity" : "Infinity";
-			return;
-		}
-		char buffer[64];
-		const char * begin = buffer;
-		const char * end = buffer;
-#if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
-		end = std::to_chars(buffer, buffer + sizeof(buffer), value).ptr;
-#else
-		end = buffer + std::snprintf(buffer, sizeof(buffer), "%.17g", value);
-#endif
-		out.append(begin, end);
-		// Python's repr keeps floats visibly floats: 1.0, not 1
-		bool looks_integral = true;
-		for (const char * it = begin; it != end; ++it) {
-			if (*it == '.' || *it == 'e' || *it == 'E') {
-				looks_integral = false;
+	template <typename T> CTJSON_DUMPS_CONSTEXPR void write_integer(T value) {
+		char buffer[24]{};
+		int length = 0;
+		auto magnitude = static_cast<unsigned long long>(value);
+		if constexpr (std::is_signed_v<T>) {
+			if (value < 0) {
+				out += '-';
+				magnitude = 0ull - magnitude;
 			}
 		}
-		if (looks_integral) {
+		do {
+			buffer[length++] = static_cast<char>('0' + magnitude % 10);
+			magnitude /= 10;
+		} while (magnitude != 0);
+		while (length > 0) {
+			out += buffer[--length];
+		}
+	}
+
+	CTJSON_DUMPS_CONSTEXPR void write_floating(double value) {
+		const unsigned long long bits = double_bits(value);
+		const bool negative = (bits >> 63) != 0;
+		const auto biased_exponent = static_cast<int>((bits >> 52) & 0x7FF);
+		const unsigned long long fraction = bits & 0xFFFFFFFFFFFFFull;
+
+		if (biased_exponent == 0x7FF) {
+			// like Python's allow_nan=True
+			if (fraction != 0) {
+				out += "NaN";
+			} else {
+				out += negative ? "-Infinity" : "Infinity";
+			}
+			return;
+		}
+		if (negative) {
+			out += '-';
+		}
+		if (biased_exponent == 0 && fraction == 0) {
+			out += "0.0";
+			return;
+		}
+
+		unsigned long long mantissa = fraction;
+		int exponent2 = 0;
+		bool boundary_is_closer = false;
+		if (biased_exponent == 0) {
+			exponent2 = 1 - 1075; // denormal
+		} else {
+			mantissa |= 1ull << 52;
+			exponent2 = biased_exponent - 1075;
+			// the gap below is halved right above a power of two
+			boundary_is_closer = fraction == 0 && biased_exponent > 1;
+		}
+
+		const decimal_digits d = shortest_digits(mantissa, exponent2, boundary_is_closer);
+
+		// Python repr's formatting: scientific only below 1e-4 and from
+		// 1e16 up; fixed floats keep a visible ".0"
+		const int leading_exponent = d.point - 1;
+		if (leading_exponent < -4 || leading_exponent >= 16) {
+			out += d.digits[0];
+			if (d.length > 1) {
+				out += '.';
+				out.append(d.digits + 1, static_cast<size_t>(d.length - 1));
+			}
+			out += 'e';
+			out += leading_exponent < 0 ? '-' : '+';
+			const int magnitude = leading_exponent < 0 ? -leading_exponent : leading_exponent;
+			if (magnitude < 10) {
+				out += '0';
+			}
+			write_integer(magnitude);
+		} else if (d.point <= 0) {
+			out += "0.";
+			out.append(static_cast<size_t>(-d.point), '0');
+			out.append(d.digits, static_cast<size_t>(d.length));
+		} else if (d.point >= d.length) {
+			out.append(d.digits, static_cast<size_t>(d.length));
+			out.append(static_cast<size_t>(d.point - d.length), '0');
 			out += ".0";
+		} else {
+			out.append(d.digits, static_cast<size_t>(d.point));
+			out += '.';
+			out.append(d.digits + d.point, static_cast<size_t>(d.length - d.point));
 		}
 	}
 
 	// --- the object/array shells (used by containers and documents)
 
-	template <typename WriteItems> void write_array_shell(size_t count, int depth, WriteItems && write_items) {
+	template <typename WriteItems> CTJSON_DUMPS_CONSTEXPR void write_array_shell(size_t count, int depth, WriteItems && write_items) {
 		if (count == 0) {
 			out += "[]";
 			return;
@@ -5698,7 +6022,7 @@ struct dumper {
 		out += ']';
 	}
 
-	template <typename WriteItems> void write_object_shell(size_t count, int depth, WriteItems && write_items) {
+	template <typename WriteItems> CTJSON_DUMPS_CONSTEXPR void write_object_shell(size_t count, int depth, WriteItems && write_items) {
 		if (count == 0) {
 			out += "{}";
 			return;
@@ -5716,7 +6040,7 @@ struct dumper {
 
 	// members arrive as already-rendered (key token, value) strings so
 	// sort_keys can reorder them regardless of the source container
-	void write_members(std::vector<std::pair<std::string, std::string>> && members, int depth) {
+	CTJSON_DUMPS_CONSTEXPR void write_members(std::vector<std::pair<std::string, std::string>> && members, int depth) {
 		if (options.sort_keys) {
 			std::sort(members.begin(), members.end(), [](const auto & a, const auto & b) { return a.first < b.first; });
 		}
@@ -5734,7 +6058,7 @@ struct dumper {
 		});
 	}
 
-	template <typename Key> std::string render_key(const Key & key) {
+	template <typename Key> CTJSON_DUMPS_CONSTEXPR std::string render_key(const Key & key) {
 		dumper sub{{}, options};
 		if constexpr (std::is_convertible_v<const Key &, std::string_view>) {
 			sub.write_string(std::string_view(key));
@@ -5751,7 +6075,7 @@ struct dumper {
 		return std::move(sub.out);
 	}
 
-	template <typename T> std::string render_value(const T & value_to_render, int depth) {
+	template <typename T> CTJSON_DUMPS_CONSTEXPR std::string render_value(const T & value_to_render, int depth) {
 		dumper sub{{}, options};
 		sub.value(value_to_render, depth);
 		return std::move(sub.out);
@@ -5759,7 +6083,7 @@ struct dumper {
 
 	// --- ctjson document values
 
-	template <typename Node> void document(Node node, int depth) {
+	template <typename Node> CTJSON_DUMPS_CONSTEXPR void document(Node node, int depth) {
 		if constexpr (Node::type == kind::object) {
 			std::vector<std::pair<std::string, std::string>> members;
 			for_each(node, [&](auto key, auto member_value) {
@@ -5790,7 +6114,7 @@ struct dumper {
 
 	// --- the dispatcher
 
-	template <typename T> void value(const T & v, int depth) {
+	template <typename T> CTJSON_DUMPS_CONSTEXPR void value(const T & v, int depth) {
 		using D = std::remove_cv_t<std::remove_reference_t<T>>;
 		if constexpr (has_adl_to_json<D>::value) {
 			value(to_json(v), depth);
@@ -5853,24 +6177,26 @@ struct dumper {
 
 } // namespace detail
 
-// like json.dumps: encode a value as a JSON string
-CTLL_EXPORT template <typename T> std::string dumps(const T & value, dump_options options) {
+// like json.dumps: encode a value as a JSON string (constexpr with
+// C++20 library support for constexpr std::string/std::vector)
+CTLL_EXPORT template <typename T> CTJSON_DUMPS_CONSTEXPR std::string dumps(const T & value, dump_options options) {
 	detail::dumper d{{}, options};
 	d.value(value, 0);
 	return std::move(d.out);
 }
 
-CTLL_EXPORT template <typename T> std::string dumps(const T & value) {
+CTLL_EXPORT template <typename T> CTJSON_DUMPS_CONSTEXPR std::string dumps(const T & value) {
 	return dumps(value, dump_options{});
 }
 
-CTLL_EXPORT template <typename T> std::string dumps(const T & value, int indent) {
+CTLL_EXPORT template <typename T> CTJSON_DUMPS_CONSTEXPR std::string dumps(const T & value, int indent) {
 	dump_options options;
 	options.indent = indent;
 	return dumps(value, options);
 }
 
-// like json.dump: encode into a stream
+// like json.dump: encode into a stream (runtime: streams cannot be
+// constant evaluated)
 CTLL_EXPORT template <typename T> void dump(const T & value, std::ostream & stream, dump_options options) {
 	stream << dumps(value, options);
 }

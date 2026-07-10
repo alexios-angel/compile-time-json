@@ -110,3 +110,44 @@ int main() {
 	std::puts("all dumps tests passed");
 	return 0;
 }
+
+// dumps is constexpr: with C++20 constexpr std::string/std::vector
+// support, whole encodings can be static_asserted - floats included,
+// thanks to the built-in constexpr Dragon4
+#if defined(__cpp_lib_constexpr_string) && __cpp_lib_constexpr_string >= 201907L \
+ && defined(__cpp_lib_constexpr_vector) && __cpp_lib_constexpr_vector >= 201907L \
+ && defined(__cpp_lib_bit_cast)
+
+static_assert(ctjson::dumps(42) == "42");
+static_assert(ctjson::dumps(true) == "true");
+static_assert(ctjson::dumps(nullptr) == "null");
+static_assert(ctjson::dumps("hi\n") == "\"hi\\n\"");
+static_assert(ctjson::dumps(std::vector<int>{1, 2, 3}) == "[1, 2, 3]");
+static_assert(ctjson::dumps(std::tuple{1, "a"}, 2) == "[\n  1,\n  \"a\"\n]");
+
+// floating point at compile time, matching Python's repr exactly
+static_assert(ctjson::dumps(1.0) == "1.0");
+static_assert(ctjson::dumps(-0.0) == "-0.0");
+static_assert(ctjson::dumps(0.1) == "0.1");
+static_assert(ctjson::dumps(2.5) == "2.5");
+static_assert(ctjson::dumps(0.30000000000000004) == "0.30000000000000004");
+static_assert(ctjson::dumps(1e-4) == "0.0001");
+static_assert(ctjson::dumps(1e-5) == "1e-05");   // Python's sci threshold
+static_assert(ctjson::dumps(1e15) == "1000000000000000.0");
+static_assert(ctjson::dumps(1e16) == "1e+16");
+static_assert(ctjson::dumps(5e-324) == "5e-324"); // smallest denormal
+static_assert(ctjson::dumps(1.7976931348623157e308) == "1.7976931348623157e+308");
+static_assert(ctjson::dumps(3.141592653589793) == "3.141592653589793");
+
+#if CTLL_CNTTP_COMPILER_CHECK
+// a parsed document dumps inside a constant expression too, sort_keys
+// included (std::map itself is not constexpr, but documents are)
+static_assert(ctjson::dumps(ctjson::parse<R"({"n": [1, 2.50]})">()) == R"({"n": [1, 2.50]})");
+static_assert([] {
+	ctjson::dump_options options;
+	options.sort_keys = true;
+	return ctjson::dumps(ctjson::parse<R"({"b":2,"a":1})">(), options) == R"({"a": 1, "b": 2})";
+}());
+#endif
+
+#endif

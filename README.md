@@ -72,8 +72,20 @@ the spelling they were parsed with; the result is null-terminated.
 
 ## Python-style runtime API
 
-`ctjson::dumps` is `json.dumps` for ordinary C++ values, with output
-verified byte-identical against CPython:
+`ctjson::dumps` is `json.dumps` for ordinary C++ values — and it is
+`constexpr`, so whole encodings can be `static_assert`ed (needs C++20's
+constexpr `std::string`/`std::vector`; `dump` to a stream is inherently
+runtime). Floats are rendered by a built-in constexpr Dragon4 (shortest
+round-tripping digits via exact big-integer arithmetic) with Python
+repr's formatting rule, and the output is verified byte-identical
+against CPython across 100,000 fuzzed doubles plus every edge case:
+
+```c++
+static_assert(ctjson::dumps(std::vector<int>{1, 2, 3}) == "[1, 2, 3]");
+static_assert(ctjson::dumps(0.1) == "0.1");
+static_assert(ctjson::dumps(1e16) == "1e+16");     // Python's sci threshold
+static_assert(ctjson::dumps(5e-324) == "5e-324");  // denormals exact
+```
 
 ```c++
 ctjson::dumps(std::map<std::string, std::vector<int>>{{"a", {1, 2}}});
