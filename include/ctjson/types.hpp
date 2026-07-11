@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #endif
 
 // The document types a parse produces. The whole document is a TYPE -
@@ -171,6 +172,12 @@ CTLL_EXPORT template <typename... Values> struct array {
 		return nth<Index, Values...>();
 	}
 
+	// get, spelled with brackets: the index rides in the argument's type
+	// (ctjson::literals: arr[1_i])
+	template <size_t Index> constexpr auto operator[](std::integral_constant<size_t, Index>) const noexcept {
+		return get<Index>();
+	}
+
 private:
 	template <size_t Index, typename Head, typename... Tail> static constexpr auto nth() noexcept {
 		if constexpr (Index == 0) {
@@ -220,6 +227,14 @@ CTLL_EXPORT template <typename... Members> struct object {
 	}
 #endif
 
+	// get, spelled with brackets: the key is a document string TYPE, so
+	// this works with the "..."_k literal (C++20) and with any key a
+	// for_each hands out, in any standard
+	template <auto... Chars> constexpr auto operator[](string<Chars...>) const noexcept {
+		static_assert((string_key_matches<string<Chars...>, Members>() || ...), "ctjson: no member with this key");
+		return find_string_key<string<Chars...>, Members...>();
+	}
+
 	// positional access, for iterating members
 	template <size_t Index> static constexpr auto key() noexcept {
 		static_assert(Index < sizeof...(Members), "ctjson: member index out of range");
@@ -267,6 +282,18 @@ private:
 			return nth<Index - 1, Tail...>();
 		}
 	}
+
+	template <typename Key, typename Member> static constexpr bool string_key_matches() noexcept {
+		return Key::view() == Member::key_type::view();
+	}
+
+	template <typename Key, typename Head, typename... Tail> static constexpr auto find_string_key() noexcept {
+		if constexpr (string_key_matches<Key, Head>()) {
+			return typename Head::value_type{};
+		} else {
+			return find_string_key<Key, Tail...>();
+		}
+	}
 };
 
 // compile-time iteration: the callable is invoked once per element
@@ -278,6 +305,46 @@ CTLL_EXPORT template <typename F, typename... Values> constexpr void for_each(ar
 CTLL_EXPORT template <typename F, typename... Members> constexpr void for_each(object<Members...>, F && f) {
 	(f(typename Members::key_type{}, typename Members::value_type{}), ...);
 }
+
+// --- literal suffixes: keys and indexes as types, for operator[]
+
+namespace detail {
+
+#if CTLL_CNTTP_COMPILER_CHECK
+template <ctll::fixed_string S, size_t... I> constexpr auto lift_key(std::index_sequence<I...>) noexcept {
+	return string<static_cast<char>(S[I])...>{};
+}
+#endif
+
+template <char... Digits> constexpr size_t parse_index() noexcept {
+	constexpr char digits[]{Digits...};
+	size_t value = 0;
+	for (const char c : digits) {
+		if (c != '\'') { // the digit separator
+			value = value * 10 + static_cast<size_t>(c - '0');
+		}
+	}
+	return value;
+}
+
+} // namespace detail
+
+// opt in with `using namespace ctjson::literals`
+namespace literals {
+
+#if CTLL_CNTTP_COMPILER_CHECK
+// "name"_k: the key as a document string type - doc["name"_k]
+CTLL_EXPORT template <ctll::fixed_string S> constexpr auto operator""_k() noexcept {
+	return detail::lift_key<S>(std::make_index_sequence<S.size()>{});
+}
+#endif
+
+// 1_i: an index as an integral constant - arr[1_i]
+CTLL_EXPORT template <char... Digits> constexpr auto operator""_i() noexcept {
+	return std::integral_constant<size_t, detail::parse_index<Digits...>()>{};
+}
+
+} // namespace literals
 
 } // namespace ctjson
 

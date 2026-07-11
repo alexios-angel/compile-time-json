@@ -61,6 +61,7 @@ set(CTJSON_HEADERS
 	include/ctjson/load.hpp
 	include/ctjson/serialize.hpp
 	include/ctjson/types.hpp
+	include/ctjson/views.hpp
 	include/ctlark.hpp
 	include/ctlark/actions.hpp
 	include/ctlark/ast.hpp

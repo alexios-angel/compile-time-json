@@ -70,6 +70,30 @@ ctjson::for_each(doc, [](auto key, auto value) { ... });
 `serialize` re-emits strings with the mandatory escapes and numbers with
 the spelling they were parsed with; the result is null-terminated.
 
+Brackets and iteration:
+
+```c++
+using namespace ctjson::literals;
+
+doc["name"_k];                 // get<"name">(), spelled with brackets
+doc["tags"_k][1_i];            // the key or index rides in the argument's TYPE
+ctjson::for_each(doc, [](auto key, auto) { defaults[key]; });  // keys are types too
+
+// begin/end yield uniform views (kind + text) from static storage, so
+// range-for and algorithms work - in constexpr evaluation included:
+for (const auto & m : doc) {
+    m.key;          // std::string_view
+    m.value.type;   // ctjson::kind
+    m.value.text;   // decoded strings, raw number spellings, minified containers
+}
+```
+
+`operator[]` is `get` under a different spelling: elements have distinct
+types, so the key or index must be a *type* — `"..."_k` (C++20) and any
+key `for_each` hands out, or `N_i` for arrays (both `_i` and key objects
+work in C++17). Iterators hand out *views* for the same reason; when you
+need the element itself, with its own accessors, `for_each` is the tool.
+
 ## Python-style runtime API
 
 `ctjson::dumps` is `json.dumps` for ordinary C++ values — and it is
