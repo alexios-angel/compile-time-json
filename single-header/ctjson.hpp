@@ -6177,8 +6177,12 @@ template <size_t N> struct grammar_tables {
 				for (int c = n.child; c >= 0; c = nodes[c].sib) {
 					m.merge(member_mask(c, false));
 				}
-				if (n.a) { m.invert(); }
+				// case closure applies to the MEMBERS, then negation
+				// complements the closed set: [^a]i excludes both a
+				// and A (closing after inverting would instead ADD the
+				// flipped cases to the matches)
 				if (ci) { m.ci_close(); }
+				if (n.a) { m.invert(); }
 				return char_frag(m);
 			}
 			case pk::ci:
@@ -7889,8 +7893,12 @@ template <size_t N> struct grammar_tables {
 				for (int c = n.child; c >= 0; c = nodes[c].sib) {
 					m.merge(member_mask(c, false));
 				}
-				if (n.a) { m.invert(); }
+				// case closure applies to the MEMBERS, then negation
+				// complements the closed set: [^a]i excludes both a
+				// and A (closing after inverting would instead ADD the
+				// flipped cases to the matches)
 				if (ci) { m.ci_close(); }
+				if (n.a) { m.invert(); }
 				return char_frag(m);
 			}
 			case pk::ci:
@@ -10637,8 +10645,12 @@ template <size_t N> struct grammar_tables {
 				for (int c = n.child; c >= 0; c = nodes[c].sib) {
 					m.merge(member_mask(c, false));
 				}
-				if (n.a) { m.invert(); }
+				// case closure applies to the MEMBERS, then negation
+				// complements the closed set: [^a]i excludes both a
+				// and A (closing after inverting would instead ADD the
+				// flipped cases to the matches)
 				if (ci) { m.ci_close(); }
+				if (n.a) { m.invert(); }
 				return char_frag(m);
 			}
 			case pk::ci:
@@ -17948,8 +17960,12 @@ template <size_t N> struct grammar_tables {
 				for (int c = n.child; c >= 0; c = nodes[c].sib) {
 					m.merge(member_mask(c, false));
 				}
-				if (n.a) { m.invert(); }
+				// case closure applies to the MEMBERS, then negation
+				// complements the closed set: [^a]i excludes both a
+				// and A (closing after inverting would instead ADD the
+				// flipped cases to the matches)
 				if (ci) { m.ci_close(); }
+				if (n.a) { m.invert(); }
 				return char_frag(m);
 			}
 			case pk::ci:
@@ -19660,8 +19676,12 @@ template <size_t N> struct grammar_tables {
 				for (int c = n.child; c >= 0; c = nodes[c].sib) {
 					m.merge(member_mask(c, false));
 				}
-				if (n.a) { m.invert(); }
+				// case closure applies to the MEMBERS, then negation
+				// complements the closed set: [^a]i excludes both a
+				// and A (closing after inverting would instead ADD the
+				// flipped cases to the matches)
 				if (ci) { m.ci_close(); }
+				if (n.a) { m.invert(); }
 				return char_frag(m);
 			}
 			case pk::ci:
@@ -22408,8 +22428,12 @@ template <size_t N> struct grammar_tables {
 				for (int c = n.child; c >= 0; c = nodes[c].sib) {
 					m.merge(member_mask(c, false));
 				}
-				if (n.a) { m.invert(); }
+				// case closure applies to the MEMBERS, then negation
+				// complements the closed set: [^a]i excludes both a
+				// and A (closing after inverting would instead ADD the
+				// flipped cases to the matches)
 				if (ci) { m.ci_close(); }
+				if (n.a) { m.invert(); }
 				return char_frag(m);
 			}
 			case pk::ci:
@@ -30537,8 +30561,12 @@ template <size_t N> struct grammar_tables {
 				for (int c = n.child; c >= 0; c = nodes[c].sib) {
 					m.merge(member_mask(c, false));
 				}
-				if (n.a) { m.invert(); }
+				// case closure applies to the MEMBERS, then negation
+				// complements the closed set: [^a]i excludes both a
+				// and A (closing after inverting would instead ADD the
+				// flipped cases to the matches)
 				if (ci) { m.ci_close(); }
+				if (n.a) { m.invert(); }
 				return char_frag(m);
 			}
 			case pk::ci:
@@ -32249,8 +32277,12 @@ template <size_t N> struct grammar_tables {
 				for (int c = n.child; c >= 0; c = nodes[c].sib) {
 					m.merge(member_mask(c, false));
 				}
-				if (n.a) { m.invert(); }
+				// case closure applies to the MEMBERS, then negation
+				// complements the closed set: [^a]i excludes both a
+				// and A (closing after inverting would instead ADD the
+				// flipped cases to the matches)
 				if (ci) { m.ci_close(); }
+				if (n.a) { m.invert(); }
 				return char_frag(m);
 			}
 			case pk::ci:
@@ -34997,8 +35029,12 @@ template <size_t N> struct grammar_tables {
 				for (int c = n.child; c >= 0; c = nodes[c].sib) {
 					m.merge(member_mask(c, false));
 				}
-				if (n.a) { m.invert(); }
+				// case closure applies to the MEMBERS, then negation
+				// complements the closed set: [^a]i excludes both a
+				// and A (closing after inverting would instead ADD the
+				// flipped cases to the matches)
 				if (ci) { m.ci_close(); }
+				if (n.a) { m.invert(); }
 				return char_frag(m);
 			}
 			case pk::ci:
