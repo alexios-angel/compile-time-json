@@ -1,5 +1,5 @@
 // Brackets and iteration: operator[] is get spelled the familiar way -
-// the key or index rides in the argument's TYPE - and begin/end give
+// plain keys and indexes chain to any depth - and begin/end give
 // every container uniform views (kind + text) out of static storage,
 // so range-for and <algorithm> work over a document whose elements all
 // have different types.
@@ -10,7 +10,6 @@
 #include <algorithm>
 #include <iostream>
 
-using namespace ctjson::literals;
 
 constexpr auto repo = ctjson::parse<R"({
     "name":     "ctjson",
@@ -22,10 +21,10 @@ constexpr auto repo = ctjson::parse<R"({
 
 // --- operator[]: get, spelled with brackets, chains included
 
-static_assert(repo["name"_k] == "ctjson");
-static_assert(repo["topics"_k][2_i] == "compile-time");
-static_assert(repo["license"_k]["spdx"_k] == "Apache-2.0");
-static_assert(repo["stars"_k].to<int>() == 4700);
+static_assert(repo["name"] == "ctjson");
+static_assert(repo["topics"][2] == "compile-time");
+static_assert(repo["license"]["spdx"] == "Apache-2.0");
+static_assert(repo["stars"].to<int>() == 4700);
 
 // --- iteration: uniform views make a document an ordinary range
 
@@ -40,7 +39,7 @@ static_assert(longest.key == "archived");
 // mishandles this loop inside a constexpr lambda)
 constexpr size_t topic_chars() noexcept {
 	size_t total = 0;
-	for (const auto & v : repo["topics"_k]) {
+	for (const auto & v : repo["topics"]) {
 		total += v.text.size(); // strings view their decoded content
 	}
 	return total;
@@ -57,7 +56,7 @@ int main() {
 	}
 
 	std::cout << "\ntopics:";
-	for (const auto & v : repo["topics"_k]) {
+	for (const auto & v : repo["topics"]) {
 		std::cout << ' ' << v.text;
 	}
 	std::cout << "\n";

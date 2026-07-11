@@ -46,8 +46,8 @@ template <ctll::fixed_string input> constexpr auto ctjson::parse();
 
 | Type | Accessors |
 |------|-----------|
-| `object<members...>` | `get<"key">()`, `["key"_k]`, `contains<"key">()`, `size()`, `empty()`, positional `key<N>()` / `value<N>()`, range-for over member views |
-| `array<values...>` | `get<N>()`, `[N_i]`, `size()`, `empty()`, range-for over value views |
+| `object<members...>` | `get<"key">()`, `["key"]`, `contains<"key">()`, `size()`, `empty()`, positional `key<N>()` / `value<N>()`, range-for over member views |
+| `array<values...>` | `get<N>()`, `[N]`, `size()`, `empty()`, range-for over value views |
 | `string<chars...>` | `view()`, `c_str()` (null-terminated), `size()`, `empty()`, `==` with `std::string_view` |
 | `number<chars...>` | `to<T>()` for any arithmetic `T`, `is_integer()`, `view()` (raw spelling), `c_str()` |
 | `boolean<B>` | `value`, `operator bool` |
@@ -73,11 +73,10 @@ the spelling they were parsed with; the result is null-terminated.
 Brackets and iteration:
 
 ```c++
-using namespace ctjson::literals;
 
-doc["name"_k];                 // get<"name">(), spelled with brackets
-doc["tags"_k][1_i];            // the key or index rides in the argument's TYPE
-ctjson::for_each(doc, [](auto key, auto) { defaults[key]; });  // keys are types too
+doc["name"];                 // get<"name">(), spelled with brackets
+doc["tags"][1];              // plain keys and indexes; chains work to any depth
+doc.contains("tags");            // runtime keys work too
 
 // begin/end yield uniform views (kind + text) from static storage, so
 // range-for and algorithms work - in constexpr evaluation included:
@@ -88,11 +87,10 @@ for (const auto & m : doc) {
 }
 ```
 
-`operator[]` is `get` under a different spelling: elements have distinct
-types, so the key or index must be a *type* — `"..."_k` (C++20) and any
-key `for_each` hands out, or `N_i` for arrays (both `_i` and key objects
-work in C++17). Iterators hand out *views* for the same reason; when you
-need the element itself, with its own accessors, `for_each` is the tool.
+Elements have distinct types, so a runtime key or index cannot return the
+element itself. `operator[]` returns a uniform `value_view`, which remains
+constexpr and can be chained; misses produce a null view. `get<...>()`
+remains the typed accessor.
 The records are `value_view` and `member_view`
 ([`views.hpp`](include/ctjson/views.hpp)), and
 [`examples/iteration.cpp`](examples/iteration.cpp) is a runnable tour.

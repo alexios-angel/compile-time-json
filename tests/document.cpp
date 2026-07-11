@@ -141,14 +141,16 @@ static_assert([] {
 
 namespace bracket_tests {
 
-using namespace ctjson::literals;
 
 constexpr auto d = ctjson::parse<R"({"name":"Hana","tags":["regex","ct"],"n":42})">();
 
-// [] is get, with the key or index carried in the argument's type
-static_assert(d["name"_k] == "Hana"sv);
-static_assert(d["tags"_k][1_i] == "ct"sv);
-static_assert(d["n"_k].to<int>() == 42);
+// [] takes a plain key or index and returns a uniform view
+static_assert(d["name"] == "Hana"sv);
+static_assert(d["tags"][1] == "ct"sv);
+static_assert(d["n"].to<int>() == 42);
+static_assert(d.contains("tags"));
+static_assert(!d.contains("missing"));
+static_assert(d["missing"][0]["still-missing"].type == ctjson::kind::null);
 
 // keys handed out by for_each work as [] arguments too
 static_assert([] {
@@ -183,7 +185,7 @@ static_assert([] {
 
 static_assert([] {
 	size_t text_chars = 0;
-	for (const auto & v : d["tags"_k]) {
+	for (const auto & v : d["tags"]) {
 		text_chars += v.text.size(); // strings view their decoded content
 	}
 	return text_chars;

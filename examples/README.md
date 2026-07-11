@@ -14,6 +14,6 @@ also build and run as tests through CMake/CTest.
 | [`localization.cpp`](localization.cpp) | a message catalog with compile-time fallback via `contains<>` and `if constexpr`, iterated with `for_each` |
 | [`python-style.cpp`](python-style.cpp) | the runtime encoder: `dumps`/`dump` on native C++ values, indent and sort_keys, the `to_json` hook |
 | [`cxx17-syntax.cpp`](cxx17-syntax.cpp) | the C++17 API: `fixed_string` variables for inputs and keys (built with `-std=c++17`) |
-| [`iteration.cpp`](iteration.cpp) | brackets and iteration: `_k`/`_i` lookups with `operator[]`, uniform views with range-for and `<algorithm>`, a runtime table dump with kind dispatch |
+| [`iteration.cpp`](iteration.cpp) | brackets and iteration: `doc["key"]`/`array[1]` lookups with `operator[]`, uniform views with range-for and `<algorithm>`, a runtime table dump with kind dispatch |
 
 All examples build in C++20 mode except `cxx17-syntax.cpp`.

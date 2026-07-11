@@ -17,12 +17,11 @@ static_assert(doc.template get<n_key>().template to<int>() == 42);
 
 void empty_symbol() { }
 
-// operator[] needs no C++20: keys from for_each and _i indexes are types
-using namespace ctjson::literals;
+// operator[] takes plain runtime keys and indexes in C++17
 
 static constexpr auto seq_text = ctll::fixed_string{R"([10, 20, 30])"};
 constexpr auto seq = ctjson::parse<seq_text>();
-static_assert(seq[1_i].template to<int>() == 20);
+static_assert(seq[1].template to<int>() == 20);
 
 static_assert([] {
 	int hits = 0;
