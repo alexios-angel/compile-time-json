@@ -41,3 +41,14 @@ static_assert([] {
 	}
 	return n;
 }() == (4 + 4) + (1 + 2));
+
+// diagnostics through the variable-form API
+static_assert(ctjson::error_info<doc_text>().ok());
+constexpr auto bad_info = ctjson::error_info<bad_text>(); // "{oops"
+static_assert(bad_info.kind == ctlark::error_kind::lex);
+static_assert(bad_info.line == 1 && bad_info.column == 2);
+static_assert(!ctjson::error_message<bad_text>().empty());
+static_assert(ctjson::bind_error<doc_text>().ok());
+constexpr auto traced = ctjson::debug::traced_parse<bad_text>();
+static_assert(!traced.ok && traced.log.events > 0);
+static_assert(!ctjson::debug::dump_tokens<doc_text>().empty());

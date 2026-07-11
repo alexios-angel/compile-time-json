@@ -73,12 +73,22 @@ int main() {
 	assert(!ctjson::loads("\"unterminated").has_value());
 	assert(!ctjson::loads("tru").has_value());
 
-	// error reporting carries the byte offset
+	// error reporting carries the byte offset, line and column
 	{
 		ctjson::load_error error;
 		assert(!ctjson::loads("[1, 2,]", error).has_value());
 		assert(error.position == 6);
 		assert(error.message[0] != '\0');
+		assert(error.line == 1 && error.column == 7);
+	}
+	{
+		ctjson::load_error error;
+		assert(!ctjson::loads("[1,\n 2,]", error).has_value());
+		assert(error.position == 7); // the ']' after the trailing comma
+		assert(error.line == 2 && error.column == 4);
+		const std::string rendered = ctjson::to_string(error);
+		assert(rendered.rfind("line 2, column 4: ", 0) == 0);
+		assert(rendered.size() > sizeof("line 2, column 4: "));
 	}
 
 	// deep nesting is rejected, not a stack overflow

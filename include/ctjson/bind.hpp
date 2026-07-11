@@ -19,7 +19,46 @@
 // by a low one, and a lone low surrogate is an error. bind<Tree>::ok
 // folds those checks over the whole document; is_valid includes it.
 
+namespace ctjson {
+
+// why the binder rejected a document that PARSES - the one JSON rule
+// the grammar itself cannot express
+CTLL_EXPORT enum class bind_reason : unsigned char {
+	none,
+	bad_surrogate // \uXXXX surrogate pairing rules in a string
+};
+
+CTLL_EXPORT constexpr std::string_view to_string(bind_reason r) noexcept {
+	switch (r) {
+		case bind_reason::none: return "none";
+		case bind_reason::bad_surrogate: return "bad \\u surrogate pairing in a string";
+	}
+	return "unknown";
+}
+
+// the first binder failure: which rule broke, and the raw offending
+// token as written in the input
+CTLL_EXPORT struct bind_error_t {
+	bind_reason reason = bind_reason::none;
+	std::string_view where{};
+
+	constexpr bool ok() const noexcept {
+		return reason == bind_reason::none;
+	}
+};
+
+} // namespace ctjson
+
 namespace ctjson::detail {
+
+// first-failure-wins fold over child binders
+template <typename... Bs> constexpr bind_error_t bind_first_fail() noexcept {
+	const bind_error_t fails[] = {Bs::fail..., bind_error_t{}};
+	for (const bind_error_t & f : fails) {
+		if (f.reason != bind_reason::none) { return f; }
+	}
+	return bind_error_t{};
+}
 
 using bt_object = ctlark::text<'o', 'b', 'j', 'e', 'c', 't'>;
 using bt_pair = ctlark::text<'p', 'a', 'i', 'r'>;
@@ -139,41 +178,52 @@ template <typename Node> struct bind;
 template <typename... Pairs> struct bind<ctlark::tree<bt_object, Pairs...>> {
 	using type = ctjson::object<typename bind<Pairs>::type...>;
 	static constexpr bool ok = (bind<Pairs>::ok && ... && true);
+	static constexpr bind_error_t fail = bind_first_fail<bind<Pairs>...>();
 };
 
 template <typename Key, typename Value> struct bind<ctlark::tree<bt_pair, Key, Value>> {
 	using decoded_key = decode_string<typename Key::value_type>;
 	using type = ctjson::member<typename decoded_key::type, typename bind<Value>::type>;
 	static constexpr bool ok = decoded_key::ok && bind<Value>::ok;
+	static constexpr bind_error_t fail =
+		decoded_key::ok ? bind<Value>::fail
+		                : bind_error_t{bind_reason::bad_surrogate, Key::value_type::view()};
 };
 
 template <typename... Values> struct bind<ctlark::tree<bt_array, Values...>> {
 	using type = ctjson::array<typename bind<Values>::type...>;
 	static constexpr bool ok = (bind<Values>::ok && ... && true);
+	static constexpr bind_error_t fail = bind_first_fail<bind<Values>...>();
 };
 
 template <typename Token> struct bind<ctlark::tree<bt_string, Token>> {
 	using decoded = decode_string<typename Token::value_type>;
 	using type = typename decoded::type;
 	static constexpr bool ok = decoded::ok;
+	static constexpr bind_error_t fail =
+		decoded::ok ? bind_error_t{} : bind_error_t{bind_reason::bad_surrogate, Token::value_type::view()};
 };
 
 template <typename Token> struct bind<ctlark::tree<bt_number, Token>> {
 	using type = typename make_number<typename Token::value_type>::type;
 	static constexpr bool ok = true;
+	static constexpr bind_error_t fail{};
 };
 
 template <> struct bind<ctlark::tree<bt_true>> {
 	using type = ctjson::boolean<true>;
 	static constexpr bool ok = true;
+	static constexpr bind_error_t fail{};
 };
 template <> struct bind<ctlark::tree<bt_false>> {
 	using type = ctjson::boolean<false>;
 	static constexpr bool ok = true;
+	static constexpr bind_error_t fail{};
 };
 template <> struct bind<ctlark::tree<bt_null>> {
 	using type = ctjson::null;
 	static constexpr bool ok = true;
+	static constexpr bind_error_t fail{};
 };
 
 } // namespace ctjson::detail

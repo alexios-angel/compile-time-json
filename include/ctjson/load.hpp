@@ -50,7 +50,14 @@ namespace ctjson {
 struct load_error {
 	size_t position = 0;
 	const char * message = "";
+	size_t line = 1;   // 1-based, filled by loads/load on failure
+	size_t column = 1;
 };
+
+// "line 2, column 5: ',' or ']' expected in an array"
+CTLL_EXPORT inline std::string to_string(const load_error & e) {
+	return "line " + std::to_string(e.line) + ", column " + std::to_string(e.column) + ": " + e.message;
+}
 
 CTLL_EXPORT class value {
 	kind type_ = kind::null;
@@ -607,6 +614,9 @@ CTLL_EXPORT inline std::optional<value> loads(std::string_view text, load_error 
 	value result;
 	if (!parser.parse_document(result)) {
 		error = parser.error;
+		const ctlark::source_position at = ctlark::locate(text, error.position);
+		error.line = at.line;
+		error.column = at.column;
 		return std::nullopt;
 	}
 	return result;

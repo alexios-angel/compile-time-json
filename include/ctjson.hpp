@@ -52,9 +52,40 @@ template <CTJSON_STRING_INPUT input> constexpr bool valid_document() noexcept {
 CTLL_EXPORT template <CTJSON_STRING_INPUT input> constexpr bool is_valid =
 	detail::valid_document<input>();
 
+// what failed and where, when it does not: kind, byte offset, line,
+// column and the expected terminals (kind none = the syntax is fine)
+CTLL_EXPORT template <CTJSON_STRING_INPUT input> constexpr ctlark::error_info_t error_info() noexcept {
+	return ctlark::error_info<detail::json_grammar, input, detail::json_start>();
+}
+
+// the rendered diagnostic - location, snippet with a caret, expected
+// terminals - as a static string ("" when the syntax is fine)
+CTLL_EXPORT template <CTJSON_STRING_INPUT input> constexpr std::string_view error_message() noexcept {
+	return ctlark::error_message<detail::json_grammar, input, detail::json_start>();
+}
+
+// why the binder rejected a document that PARSES (the \u surrogate
+// rules a grammar cannot express); reason none when the document is
+// valid or when the syntax already failed
+CTLL_EXPORT template <CTJSON_STRING_INPUT input> constexpr bind_error_t bind_error() noexcept {
+	if constexpr (!ctlark::is_valid<detail::json_grammar, input, detail::json_start>) {
+		return bind_error_t{};
+	} else {
+		return detail::bind<decltype(ctlark::parse<detail::json_grammar, input, detail::json_start>())>::fail;
+	}
+}
+
 // parse the input into its document value; invalid JSON fails to compile
 CTLL_EXPORT template <CTJSON_STRING_INPUT input> constexpr auto parse() noexcept {
-	static_assert(is_valid<input>, "ctjson: the input is not valid JSON");
+#ifdef CTLARK_VERBOSE_ERRORS
+	(void)ctlark::verbose_report<detail::json_grammar, input, detail::json_start>();
+#endif
+	static_assert(ctlark::is_valid<detail::json_grammar, input, detail::json_start>,
+	              "ctjson: the input is not valid JSON - print ctjson::error_message<input>() "
+	              "for the location and the expected tokens");
+	static_assert(!ctlark::is_valid<detail::json_grammar, input, detail::json_start> || is_valid<input>,
+	              "ctjson: the input parses but breaks JSON's \\u surrogate rules - print "
+	              "ctjson::bind_error<input>() for the offending string");
 	if constexpr (is_valid<input>) {
 		using bound = detail::bind<decltype(ctlark::parse<detail::json_grammar, input, detail::json_start>())>;
 		return typename bound::type{};
@@ -73,6 +104,30 @@ CTLL_EXPORT template <const auto & input> constexpr auto loads() noexcept {
 	return parse<input>();
 }
 #endif
+
+// the ctlark debugging toolbox with the JSON grammar baked in: traced
+// parses (also runnable at runtime under a debugger), runtime inputs
+// against the compile-time tables, token and grammar dumps
+namespace debug {
+
+CTLL_EXPORT template <CTJSON_STRING_INPUT input, size_t Cap = 4096> constexpr auto traced_parse() noexcept {
+	return ctlark::debug::traced_parse<detail::json_grammar, input, detail::json_start, Cap>();
+}
+
+CTLL_EXPORT template <CTJSON_STRING_INPUT input> constexpr std::string_view dump_tokens() noexcept {
+	return ctlark::debug::dump_tokens<detail::json_grammar, input, detail::json_start>();
+}
+
+CTLL_EXPORT constexpr std::string_view dump_grammar() noexcept {
+	return ctlark::debug::dump_grammar<detail::json_grammar>();
+}
+
+CTLL_EXPORT template <size_t MaxTokens = 1024>
+ctlark::debug::runtime_result parse_runtime(std::string_view in) {
+	return ctlark::debug::parse_runtime<detail::json_grammar, MaxTokens>(in, "value");
+}
+
+} // namespace debug
 
 } // namespace ctjson
 

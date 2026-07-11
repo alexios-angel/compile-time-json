@@ -204,4 +204,46 @@ static_assert(ctjson::begin(ctjson::parse<"[]">()) == ctjson::end(ctjson::parse<
 
 } // namespace bracket_tests
 
+// --- diagnostics: error_info, error_message, bind_error, debug tools
+
+// valid documents report nothing
+static_assert(ctjson::error_info<"[1,2,3]">().ok());
+static_assert(ctjson::error_message<"[1,2,3]">() == ""sv);
+
+// a trailing comma: kind, offset, line, column and the expected tokens
+constexpr auto trailing_comma = ctjson::error_info<"[1,2,]">();
+static_assert(trailing_comma.kind == ctlark::error_kind::lex);
+static_assert(trailing_comma.position == 5 && trailing_comma.line == 1 && trailing_comma.column == 6);
+static_assert(trailing_comma.expected_count == 7);
+static_assert(trailing_comma.expected[0] == "STRING"sv && trailing_comma.expected[1] == "NUMBER"sv);
+static_assert(ctjson::error_message<"[1,2,]">() ==
+              "ctlark: lexical error at line 1, column 6: no expected terminal matches\n"
+              "  [1,2,]\n"
+              "       ^\n"
+              "expected: STRING, NUMBER, 'true', 'false', 'null', '{', '['"sv);
+
+// a missing comma in a multi-line document points at the right line
+constexpr auto missing_comma = ctjson::error_info<"{\"a\": 1\n\"b\": 2}">();
+static_assert(missing_comma.kind == ctlark::error_kind::lex);
+static_assert(missing_comma.line == 2 && missing_comma.column == 1);
+
+// the binder names the string that breaks the surrogate rules
+constexpr auto surrogate = ctjson::bind_error<R"(["ok", "\uD800"])">();
+static_assert(surrogate.reason == ctjson::bind_reason::bad_surrogate);
+static_assert(surrogate.where == R"("\uD800")"sv);
+static_assert(ctjson::bind_error<R"(["ok"])">().ok());
+static_assert(ctjson::bind_error<"[1,2,]">().ok()); // syntax failed first: the binder never ran
+
+// the ctlark debugging toolbox with the JSON grammar baked in
+static_assert(ctjson::debug::dump_tokens<"[1, true]">() ==
+              "LSQB '[' @0..1\n"
+              "NUMBER '1' @1..2\n"
+              "COMMA ',' @2..3\n"
+              "TRUE 'true' @4..8\n"
+              "RSQB ']' @8..9\n"sv);
+constexpr auto traced = ctjson::debug::traced_parse<"[1,2,]">();
+static_assert(!traced.ok && traced.error.kind == ctlark::error_kind::lex);
+static_assert(traced.log.events > 0);
+static_assert(ctjson::debug::dump_grammar().find("pair: STRING COLON value") != std::string_view::npos);
+
 #endif
