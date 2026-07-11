@@ -4,7 +4,6 @@
 #include "../ctll/fixed_string.hpp"
 #ifndef CTJSON_IN_A_MODULE
 #include <cstddef>
-#include <limits>
 #include <string_view>
 #include <type_traits>
 #endif
@@ -14,12 +13,9 @@
 // parameters - so the values here are empty structs whose accessors are
 // all constexpr and static.
 //
-// String content is stored as UTF-8 bytes (double-quote escapes,
-// \uXXXX and \UXXXXXXXX included, are decoded during parsing); numbers
-// keep their raw spelling - decimal, hex, octal, float or .inf/.nan -
-// and convert on demand. Mapping keys are strings: JSON's tag
-// resolution is applied to values, not keys, so `get<"true">()` finds
-// the key spelled true.
+// String content is stored as UTF-8 bytes (escapes, including \uXXXX and
+// surrogate pairs, are decoded during parsing); numbers keep their raw
+// spelling and convert on demand.
 
 namespace ctjson {
 
@@ -34,48 +30,17 @@ CTLL_EXPORT enum class kind {
 
 namespace detail {
 
-// the conversion behind number::to and value_view::to: JSON
-// schema spellings - sign, .inf/.nan, hex, octal, decimal with
-// fraction and exponent - parsed from their text
+// the conversion behind number::to and value_view::to: a JSON
+// number - optional minus, digits, fraction, exponent - parsed
+// from its text
 template <typename T> constexpr T to_arithmetic(std::string_view text) noexcept {
 		size_t i = 0;
-		bool negative = false;
-		if (text[0] == '+' || text[0] == '-') {
-			negative = text[0] == '-';
+		const bool negative = text[0] == '-';
+		if (negative) {
 			++i;
 		}
-		// .inf and .nan (the sign, if any, was already consumed)
-		if (i < text.size() && text[i] == '.' && i + 1 < text.size()
-		    && (text[i + 1] < '0' || text[i + 1] > '9')) {
-			if constexpr (std::is_integral_v<T>) {
-				return T{}; // no integral infinity; converting is the caller's choice
-			} else {
-				if (text[i + 1] == 'n' || text[i + 1] == 'N') {
-					return std::numeric_limits<T>::quiet_NaN();
-				}
-				return negative ? -std::numeric_limits<T>::infinity()
-				                : std::numeric_limits<T>::infinity();
-			}
-		}
-		// hex and octal integers
-		if (i + 1 < text.size() && text[i] == '0' && (text[i + 1] == 'x' || text[i + 1] == 'o')) {
-			const unsigned base = text[i + 1] == 'x' ? 16u : 8u;
-			unsigned long long value = 0;
-			for (size_t k = i + 2; k < text.size(); ++k) {
-				const char c = text[k];
-				unsigned digit = 0;
-				if (c >= '0' && c <= '9') {
-					digit = static_cast<unsigned>(c - '0');
-				} else if (c >= 'a' && c <= 'f') {
-					digit = static_cast<unsigned>(c - 'a') + 10u;
-				} else {
-					digit = static_cast<unsigned>(c - 'A') + 10u;
-				}
-				value = value * base + digit;
-			}
-			return static_cast<T>(negative ? -static_cast<long long>(value) : static_cast<long long>(value));
-		}
-		// decimal: mantissa digits, fraction shifting the exponent down
+		// mantissa: integer digits, then fraction digits shifting the
+		// decimal exponent down
 		unsigned long long mantissa = 0;
 		int exponent10 = 0;
 		for (; i < text.size() && text[i] >= '0' && text[i] <= '9'; ++i) {
@@ -160,7 +125,7 @@ CTLL_EXPORT template <auto... Chars> struct string {
 	}
 };
 
-// --- number (raw spelling, converted on demand; JSON schema)
+// --- number (raw spelling, converted on demand)
 
 CTLL_EXPORT template <auto... Chars> struct number {
 	static constexpr kind type = kind::number;
@@ -177,22 +142,11 @@ CTLL_EXPORT template <auto... Chars> struct number {
 	}
 
 	static constexpr bool is_integer() noexcept {
-		constexpr std::string_view text = view();
-		// hex and octal are integers whatever letters they contain
-		if (text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'o')) {
-			return true;
-		}
-		for (const char c : text) {
-			if (c == '.' || c == 'e' || c == 'E') {
-				return false;
-			}
-		}
-		return true;
+		return ((Chars != '.' && Chars != 'e' && Chars != 'E') && ...);
 	}
 
 	template <typename T> static constexpr T to() noexcept {
 		return detail::to_arithmetic<T>(view());
-
 	}
 };
 

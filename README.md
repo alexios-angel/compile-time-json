@@ -73,10 +73,9 @@ the spelling they were parsed with; the result is null-terminated.
 Brackets and iteration:
 
 ```c++
-
-doc["name"];                 // get<"name">(), spelled with brackets
-doc["tags"][1];              // plain keys and indexes; chains work to any depth
-doc.contains("tags");            // runtime keys work too
+doc["name"];             // get<"name">(), spelled with brackets
+doc["tags"][1];          // plain keys and indexes; chains work to any depth
+doc.contains("tags");    // runtime keys work too
 
 // begin/end yield uniform views (kind + text) from static storage, so
 // range-for and algorithms work - in constexpr evaluation included:
@@ -211,7 +210,7 @@ target carries the compiler-specific limit flags automatically
 (`CTJSON_CONSTEXPR_LIMITS`, default ON) and the Makefiles set them:
 
 ```
-clang:  -fconstexpr-steps=500000000 -fconstexpr-depth=1024
+clang:  -fconstexpr-steps=500000000 -fconstexpr-depth=1024 -fbracket-depth=2048
 gcc:    -fconstexpr-ops-limit=3000000000 -fconstexpr-loop-limit=10000000 -fconstexpr-depth=1024
 ```
 

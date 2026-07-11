@@ -10,7 +10,6 @@
 #include <algorithm>
 #include <iostream>
 
-
 constexpr auto repo = ctjson::parse<R"({
     "name":     "ctjson",
     "stars":    4700,

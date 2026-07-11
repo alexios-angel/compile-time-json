@@ -49,7 +49,7 @@ option(CTJSON_CONSTEXPR_LIMITS "Raise constexpr evaluation limits on the interfa
 option(CTJSON_PCH "Precompile ctjson.hpp for tests and examples" ON)
 
 set(CTJSON_CONSTEXPR_OPTIONS
-  $<$<CXX_COMPILER_ID:Clang,AppleClang>:-fconstexpr-steps=500000000;-fconstexpr-depth=1024>
+  $<$<CXX_COMPILER_ID:Clang,AppleClang>:-fconstexpr-steps=500000000;-fconstexpr-depth=1024;-fbracket-depth=2048>
   $<$<CXX_COMPILER_ID:GNU>:-fconstexpr-ops-limit=3000000000;-fconstexpr-loop-limit=10000000;-fconstexpr-depth=1024>
   $<$<CXX_COMPILER_ID:MSVC>:/constexpr:steps500000000;/constexpr:depth1024>)
 
