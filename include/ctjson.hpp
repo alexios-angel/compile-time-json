@@ -1,10 +1,10 @@
 #ifndef CTJSON__HPP
 #define CTJSON__HPP
 
-#include "ctll/parser.hpp"
-#include "ctjson/json.hpp"
+#include "ctlark.hpp"
+#include "ctjson/grammar.hpp"
 #include "ctjson/types.hpp"
-#include "ctjson/actions.hpp"
+#include "ctjson/bind.hpp"
 #include "ctjson/serialize.hpp"
 #include "ctjson/dumps.hpp"
 #include "ctjson/load.hpp"
@@ -18,8 +18,11 @@
 //
 // The document is parsed while your code compiles - malformed JSON is a
 // compile error (or `false` from is_valid) - and the result is a TYPE
-// whose accessors are all constexpr. Built on CTLL, the compile-time
-// LL(1) parser from the CTRE project.
+// whose accessors are all constexpr. The grammar layer is ctlark
+// (compile-time Lark): the JSON grammar is a lark grammar string
+// (grammar.hpp), parsed and compiled to tables at compile time, and
+// the document goes through ctlark's constexpr Earley parser before
+// bind.hpp lowers the tree into the document types.
 
 namespace ctjson {
 
@@ -30,20 +33,33 @@ namespace ctjson {
 #define CTJSON_STRING_INPUT const auto &
 #endif
 
+namespace detail {
+
+// grammar validity is a given (static_assert in grammar.hpp); input
+// validity is the parse plus the binder's surrogate checks
+template <CTJSON_STRING_INPUT input> constexpr bool valid_document() noexcept {
+	if constexpr (!ctlark::is_valid<json_grammar, input, json_start>) {
+		return false;
+	} else {
+		return bind<decltype(ctlark::parse<json_grammar, input, json_start>())>::ok;
+	}
+}
+
+} // namespace detail
+
 // does the input parse as JSON?
 CTLL_EXPORT template <CTJSON_STRING_INPUT input> constexpr bool is_valid =
-	ctll::parser<json, input, json_actions>::template correct_with<context<>>;
+	detail::valid_document<input>();
 
 // parse the input into its document value; invalid JSON fails to compile
 CTLL_EXPORT template <CTJSON_STRING_INPUT input> constexpr auto parse() noexcept {
-#if CTLL_CNTTP_COMPILER_CHECK
-	constexpr auto _input = input; // workaround for GCC 9 bug 88092
-#else
-	constexpr auto & _input = input; // C++17: the argument has linkage
-#endif
-	using parsed = typename ctll::parser<json, _input, json_actions>::template output<context<>>;
-	static_assert(parsed(), "ctjson: the input is not valid JSON");
-	return ctll::front(typename parsed::output_type::stack_type{});
+	static_assert(is_valid<input>, "ctjson: the input is not valid JSON");
+	if constexpr (is_valid<input>) {
+		using bound = detail::bind<decltype(ctlark::parse<detail::json_grammar, input, detail::json_start>())>;
+		return typename bound::type{};
+	} else {
+		return null{};
+	}
 }
 
 // like json.loads, for symmetry with dumps: parse compile-time text

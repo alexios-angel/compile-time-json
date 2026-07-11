@@ -161,17 +161,38 @@ like the compile-time parser), and lone `\u` surrogates are rejected.
 
 ## How it works
 
-The same architecture as CTRE: an RFC 8259 grammar
-([`json.gram`](include/ctjson/json.gram)) is compiled by
-[Tablewright](https://github.com/alexios-angel/Tablewright) into an
-LL(1) parse table of `rule()` overloads
-([`json.hpp`](include/ctjson/json.hpp)), which CTLL — the compile-time
-LL parser from CTRE — walks character by character. Semantic actions
-([`actions.hpp`](include/ctjson/actions.hpp)) build the document on a
-type stack: strings and numbers accumulate as they are read, objects
-and arrays collect their content when they close.
+The grammar layer is
+[ctlark](https://github.com/alexios-angel/compile-time-lark)
+(compile-time Lark): the RFC 8259 grammar is a *lark grammar string*
+([`grammar.hpp`](include/ctjson/grammar.hpp)) that ctlark parses and
+compiles to constexpr tables while your code compiles, then runs its
+constexpr Earley parser over your document. The binder
+([`bind.hpp`](include/ctjson/bind.hpp)) lowers the resulting lark tree
+into the document types, decoding string escapes (including `\uXXXX`
+and surrogate pairs) to UTF-8 on the way; surrogate pairing - the one
+JSON rule a regular terminal cannot express - is checked there and
+folded into `is_valid`.
 
-Regenerate the table after editing the grammar with `make regrammar`.
+Because that work happens in headers, a **precompiled header** makes
+it a one-time cost: `make pch` (done automatically by the test build)
+compiles `ctjson.hpp` once - grammar parse, table build and all - and
+every translation unit that includes it afterwards starts from the
+baked result (about 3.4s down to 0.15s per TU with clang). The CMake
+tests and examples use `target_precompile_headers` the same way
+(`CTJSON_PCH`, default ON).
+
+An Earley parse needs a raised constexpr budget; the CMake interface
+target carries the compiler-specific limit flags automatically
+(`CTJSON_CONSTEXPR_LIMITS`, default ON) and the Makefiles set them:
+
+```
+clang:  -fconstexpr-steps=500000000 -fconstexpr-depth=1024
+gcc:    -fconstexpr-ops-limit=3000000000 -fconstexpr-loop-limit=10000000 -fconstexpr-depth=1024
+```
+
+The only generated parse table left in the tree is ctlark's own
+`lark.hpp` (the grammar of the Lark grammar language); regenerate it
+after editing `lark.gram` with `make regrammar`.
 
 ## Building and integrating
 
