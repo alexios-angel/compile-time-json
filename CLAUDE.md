@@ -1,0 +1,72 @@
+# ctjson — compile-time JSON (RFC 8259)
+
+Header-only C++ library (namespace `ctjson`). Parses JSON *while your code
+compiles*: a document becomes a type, malformed JSON is a compile error (or
+`false` from `is_valid`), and every accessor is `constexpr`. Also ships a
+**runtime** parser and a Python-`json`-style encoder. Umbrella header:
+`include/ctjson.hpp`. Repo: github.com/alexios-angel/compile-time-json — work on `main`.
+
+Prefer ripgrep (`rg`) over `grep`.
+
+## Build & test (compiling IS the test — suites are `static_assert`s)
+```bash
+make                                   # compiles every tests/*.cpp -> .o, C++20
+make CXX=clang++                       # clang
+make CXX=clang++ CXX_STANDARD=17       # C++17 mode
+make clean
+# CMake / CTest alternative:
+cmake -B build && cmake --build build && ctest --test-dir build
+```
+`make` builds a PCH of the umbrella header once (`ctjson.pch` on clang,
+`include/ctjson.hpp.gch` on gcc), then compiles each TU against it. Warnings are
+errors: `-O2 -pedantic -Wall -Wextra -Werror -Wconversion` — keep code warning-clean.
+Examples: `cd examples && make run`.
+
+## Layout / key files
+- `include/ctjson.hpp` — umbrella; defines `parse`/`is_valid`/`loads`/`error_*`/`bind_error`/`ctjson::debug`.
+- `include/ctjson/` — `grammar.hpp` (JSON as a Lark grammar *string* — DATA parsed at compile time), `types.hpp` (document types), `bind.hpp` (lowers the Lark tree to types; validates `\u` surrogate pairing), `serialize.hpp`, `views.hpp` (`value_view`/`member_view`), `dumps.hpp` (Python-style encoder), `load.hpp` (runtime parser).
+- `include/ctlark/`, `include/ctll/` (+ `ctlark.hpp`, `ctll.hpp`) — VENDORED (see gotchas).
+- `tests/` — `document.cpp`, `dumps.cpp`, `load.cpp`, `cxx17.cpp`.
+- `single-header/ctjson.hpp` (generated), `ctjson.cppm` (C++ module, `import std;`), `examples/`, `packaging/`.
+
+## Public API (compile-time)
+- `parse<input>()` → document type; invalid JSON fails the build.
+- `is_valid<input>` → `bool`, never a compile error.
+- `error_info<input>()` / `error_message<input>()` — location, caret, expected terminals.
+- `bind_error<input>()` — well-formedness rule a *parsing* doc breaks; reason `bad_surrogate`.
+- `serialize(doc)`, `for_each(...)`, `loads<input>()` (alias for `parse`).
+- `ctjson::debug`: `traced_parse<input>()`, `dump_tokens<input>()`, `dump_grammar()`, `parse_runtime(text)`.
+- Encoder: `ctjson::dumps(value[, opts])` (constexpr), `ctjson::dump(value, stream)`.
+
+## Public API (runtime — `include/ctjson/load.hpp`)
+- `loads(std::string_view)` / `load(std::istream&)` → `std::optional<ctjson::value>`.
+- Overloads taking `load_error&` fill `{position, message, line, column}`; render with `to_string(load_error)`.
+- `value` mirrors the compile-time accessors (`operator[]` is null-safe / null-object). Exception-free.
+
+## Conventions
+- **C++17/20 split (CNTTP gate):** `CTLL_CNTTP_COMPILER_CHECK` picks the input NTTP form —
+  string-literal `ctll::fixed_string` (C++20) vs a `const auto&` `constexpr ctll::fixed_string`
+  variable with linkage (C++17). See `CTJSON_STRING_INPUT` in `ctjson.hpp`; test in `tests/cxx17.cpp`.
+- Strings stored as UTF-8 (all escapes decoded at parse time); numbers keep raw spelling, `to<T>()` converts.
+- Strict RFC 8259: no trailing commas / leading zeros / unquoted keys. Duplicate keys kept, `get` finds first.
+
+## Gotchas (load-bearing)
+- **Vendoring / source of truth:** `include/ctlark` and `include/ctll` are BYTE-IDENTICAL copies from
+  **compile-time-lark** (the source of truth). Do NOT edit them here. After editing the core in
+  compile-time-lark, run `../compile-time-lark/tools/sync-vendor.sh`, verify with
+  `diff -rq`, then regenerate `single-header/`.
+- **Huge constexpr budget:** Earley-at-compile-time needs raised limits — the Makefile/CMake set them
+  (gcc `-fconstexpr-ops-limit=3000000000 -fconstexpr-loop-limit=10000000 -fconstexpr-depth=1024`;
+  clang `-fconstexpr-steps=500000000 -fconstexpr-depth=1024 -fbracket-depth=2048`; CMake opt-out
+  `-DCTJSON_CONSTEXPR_LIMITS=OFF`). Hitting the compiler's own step cap is a distinct failure from the
+  library's queryable overflow/depth errors.
+- **single-header:** `make single-header` (needs `python3 -m quom`; prepends `LICENSE`) → `single-header/ctjson.hpp`.
+- **Grammar table via Tablewright:** the only generated table is ctlark's `include/ctlark/lark.hpp`
+  (grammar-of-grammars), produced from `include/ctlark/lark.gram` by `make regrammar`
+  (needs the `tablewright` tool + `python3` + `lark`, generator `cpp_ctll_v2`). The JSON grammar itself
+  (`grammar.hpp`) is a plain Lark string — no regen needed.
+- **Diagnostics macros:** `CTLARK_VERBOSE_ERRORS`, `CTLARK_DEBUG`, `CTLARK_CONSTEXPR_ASSERT`.
+
+## Attribution (preserve — Apache-2.0 w/ LLVM Exceptions; see LICENSE, NOTICE)
+CTLL is Hana Dusíková's, from CTRE via the `notre` fork. The Lark grammar language is Lark's
+(Erez Shinan / lark-parser). `lark.hpp` is generated by Tablewright. Keep NOTICE/LICENSE intact.
