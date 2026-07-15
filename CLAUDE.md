@@ -25,7 +25,7 @@ Examples: `cd examples && make run`.
 ## Layout / key files
 - `include/ctjson.hpp` — umbrella; defines `parse`/`is_valid`/`loads`/`error_*`/`bind_error`/`ctjson::debug`.
 - `include/ctjson/` — `grammar.hpp` (JSON as a Lark grammar *string* — DATA parsed at compile time), `types.hpp` (document types), `bind.hpp` (lowers the Lark tree to types; validates `\u` surrogate pairing), `serialize.hpp`, `views.hpp` (`value_view`/`member_view`), `dumps.hpp` (Python-style encoder), `load.hpp` (runtime parser).
-- `include/ctlark/`, `include/ctll/` (+ `ctlark.hpp`, `ctll.hpp`) — VENDORED (see gotchas).
+- `external/compile-time-lark/` — ctlark + ctll git SUBMODULE (see gotchas).
 - `tests/` — `document.cpp`, `dumps.cpp`, `load.cpp`, `cxx17.cpp`.
 - `single-header/ctjson.hpp` (generated), `ctjson.cppm` (C++ module, `import std;`), `examples/`, `packaging/`.
 
@@ -51,20 +51,23 @@ Examples: `cd examples && make run`.
 - Strict RFC 8259: no trailing commas / leading zeros / unquoted keys. Duplicate keys kept, `get` finds first.
 
 ## Gotchas (load-bearing)
-- **Vendoring / source of truth:** `include/ctlark` and `include/ctll` are BYTE-IDENTICAL copies from
-  **compile-time-lark** (the source of truth). Do NOT edit them here. After editing the core in
-  compile-time-lark, run `../compile-time-lark/tools/sync-vendor.sh`, verify with
-  `diff -rq`, then regenerate `single-header/`.
+- **ctlark and ctll are a git SUBMODULE, never edit here:** `external/compile-time-lark`
+  (the source of truth) ships both — run `git submodule update --init` once after cloning;
+  bump by checking out a new commit inside the submodule and committing the gitlink.
+  The build adds `<sub>/include` AND `<sub>/include/ctlark` / `<sub>/include/ctll` to the
+  include path so the headers' relative `"../ctlark.hpp"`-style includes resolve via the
+  quoted-include fallback; the CMake install flattens everything back to
+  include/{ctjson,ctlark,ctll}. After bumping the submodule, regenerate `single-header/`.
 - **Huge constexpr budget:** Earley-at-compile-time needs raised limits — the Makefile/CMake set them
   (gcc `-fconstexpr-ops-limit=3000000000 -fconstexpr-loop-limit=10000000 -fconstexpr-depth=1024`;
   clang `-fconstexpr-steps=500000000 -fconstexpr-depth=1024 -fbracket-depth=2048`; CMake opt-out
   `-DCTJSON_CONSTEXPR_LIMITS=OFF`). Hitting the compiler's own step cap is a distinct failure from the
   library's queryable overflow/depth errors.
 - **single-header:** `make single-header` (needs `python3 -m quom`; prepends `LICENSE`) → `single-header/ctjson.hpp`.
-- **Grammar table via Tablewright:** the only generated table is ctlark's `include/ctlark/lark.hpp`
-  (grammar-of-grammars), produced from `include/ctlark/lark.gram` by `make regrammar`
-  (needs the `tablewright` tool + `python3` + `lark`, generator `cpp_ctll_v2`). The JSON grammar itself
-  (`grammar.hpp`) is a plain Lark string — no regen needed.
+- **Grammar table via Tablewright:** the only generated table is ctlark's `lark.hpp`
+  (grammar-of-grammars), which lives in the submodule — regenerate it in compile-time-lark
+  (`make regrammar` there, needs the `tablewright` tool + `python3` + `lark`, generator
+  `cpp_ctll_v2`). The JSON grammar itself (`grammar.hpp`) is a plain Lark string — no regen needed.
 - **Diagnostics macros:** `CTLARK_VERBOSE_ERRORS`, `CTLARK_DEBUG`, `CTLARK_CONSTEXPR_ASSERT`.
 
 ## Attribution (preserve — Apache-2.0 w/ LLVM Exceptions; see LICENSE, NOTICE)

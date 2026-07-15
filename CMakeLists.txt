@@ -53,6 +53,24 @@ set(CTJSON_CONSTEXPR_OPTIONS
   $<$<CXX_COMPILER_ID:GNU>:-fconstexpr-ops-limit=3000000000;-fconstexpr-loop-limit=10000000;-fconstexpr-depth=1024>
   $<$<CXX_COMPILER_ID:MSVC>:/constexpr:steps500000000;/constexpr:depth1024>)
 
+# ctlark and ctll live in a git submodule (git submodule update --init).
+# The extra .../include/ctlark and .../include/ctll entries let the
+# headers' relative `"../ctlark.hpp"`-style includes resolve through the
+# quoted-include fallback; the install keeps the flat
+# include/{ctjson,ctlark,ctll} layout, so installed consumers need
+# neither.
+set(CTJSON_SUBMODULE_INCLUDE_DIRS
+  "${PROJECT_SOURCE_DIR}/external/compile-time-lark/include"
+  "${PROJECT_SOURCE_DIR}/external/compile-time-lark/include/ctlark"
+  "${PROJECT_SOURCE_DIR}/external/compile-time-lark/include/ctll")
+if(NOT EXISTS "${PROJECT_SOURCE_DIR}/external/compile-time-lark/include/ctlark.hpp")
+  message(FATAL_ERROR
+    "ctjson: the compile-time-lark submodule is missing - run `git submodule update --init`")
+endif()
+
+file(GLOB_RECURSE CTJSON_CTLARK_HEADERS CONFIGURE_DEPENDS
+	external/compile-time-lark/include/*.hpp)
+
 set(CTJSON_HEADERS
 	include/ctjson.hpp
 	include/ctjson/bind.hpp
@@ -61,27 +79,7 @@ set(CTJSON_HEADERS
 	include/ctjson/load.hpp
 	include/ctjson/serialize.hpp
 	include/ctjson/types.hpp
-	include/ctjson/views.hpp
-	include/ctlark.hpp
-	include/ctlark/actions.hpp
-	include/ctlark/assert.hpp
-	include/ctlark/ast.hpp
-	include/ctlark/common.hpp
-	include/ctlark/compile.hpp
-	include/ctlark/debug.hpp
-	include/ctlark/diag.hpp
-	include/ctlark/earley.hpp
-	include/ctlark/lark.hpp
-	include/ctlark/lift.hpp
-	include/ctlark/text.hpp
-	include/ctlark/tree.hpp
-	include/ctll.hpp
-	include/ctll/actions.hpp
-	include/ctll/fixed_string.hpp
-	include/ctll/grammars.hpp
-	include/ctll/list.hpp
-	include/ctll/parser.hpp
-	include/ctll/utilities.hpp)
+	include/ctjson/views.hpp)
 
 if(CTJSON_MODULE)
 	if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.29.20240416")
@@ -90,7 +88,10 @@ if(CTJSON_MODULE)
 		target_sources(${PROJECT_NAME} PUBLIC FILE_SET CXX_MODULES TYPE CXX_MODULES FILES ctjson.cppm)
 		target_sources(${PROJECT_NAME} PUBLIC FILE_SET HEADERS TYPE HEADERS
 		    BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/include"
-		    FILES ${CTJSON_HEADERS})
+		        "${CMAKE_CURRENT_SOURCE_DIR}/external/compile-time-lark/include"
+		    FILES ${CTJSON_HEADERS} ${CTJSON_CTLARK_HEADERS})
+		target_include_directories(${PROJECT_NAME} PUBLIC
+		    "$<BUILD_INTERFACE:${CTJSON_SUBMODULE_INCLUDE_DIRS}>")
 
 		# we are using `import std;`
 		if (NOT DEFINED CTJSON_CXX_STANDARD OR CTJSON_CXX_STANDARD LESS 23)
@@ -113,6 +114,7 @@ else()
 
 	target_include_directories(${PROJECT_NAME} INTERFACE
 	  $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+	  "$<BUILD_INTERFACE:${CTJSON_SUBMODULE_INCLUDE_DIRS}>"
 	  $<INSTALL_INTERFACE:include>)
 
 	if (NOT CTJSON_CXX_STANDARD)
@@ -126,7 +128,12 @@ else()
 	set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_SCAN_FOR_MODULES 0)
 
 	install(TARGETS ${PROJECT_NAME} EXPORT ${PROJECT_NAME}-targets)
+	# the installed tree stays flat - include/{ctjson,ctlark,ctll} side by
+	# side - so the headers' relative includes keep working for installed
+	# consumers
 	install(DIRECTORY include/ DESTINATION include
+	    FILES_MATCHING PATTERN *.hpp)
+	install(DIRECTORY external/compile-time-lark/include/ DESTINATION include
 	    FILES_MATCHING PATTERN *.hpp)
 endif()
 
