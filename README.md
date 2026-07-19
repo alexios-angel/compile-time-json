@@ -170,8 +170,10 @@ Details:
   parse time, including `\uXXXX` and UTF-16 surrogate pairs
   (`"😀"` becomes the four UTF-8 bytes of 😀); lone
   surrogates are rejected.
+
 * Numbers keep their raw spelling; `to<T>()` converts on demand
   (integral conversions truncate fractions, like a cast).
+
 * Parsing is strict RFC 8259: no trailing commas, no leading zeros, no
   unquoted keys, no `'` strings, nothing after the root value.
   Duplicate keys are accepted (the RFC allows them); `get` finds the
